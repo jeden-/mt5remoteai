@@ -1,0 +1,20 @@
+system:
+  nazwa: "NikkeiNinja"
+  wersja: "0.1.0"
+  debug: true
+
+trading:
+  symbol: "JP225"
+  timeframes: ["M1", "M5", "M15", "H1"]
+  max_pozycji: 3
+  
+ryzyko:
+  max_ryzyko_trade: 0.02
+  max_ryzyko_dzienne: 0.06
+
+baza_danych:
+  host: "localhost"
+  port: 5432
+  nazwa: "nikkeininja"
+  uzytkownik: "ninja"
+  haslo: "${DB_PASSWORD}"  # Hasło powinno być w zmiennych środowiskowych 

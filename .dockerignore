@@ -1,0 +1,30 @@
+# Pliki środowiska Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+venv_new/
+
+# Pliki IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
+
+# Pliki logów
+*.log
+
+# Pliki testów i cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Pliki git
+.git
+.gitignore 

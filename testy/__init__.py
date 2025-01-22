@@ -1,0 +1,3 @@
+"""
+Pakiet zawierający testy systemu.
+""" 
