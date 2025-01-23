@@ -65,17 +65,29 @@ class PolaczenieMT5:
             return wynik
             
         try:
-            # Standardowa inicjalizacja MT5
+            # Sprawdzenie czy MT5 jest już zainicjalizowany
+            if mt5.terminal_info() is not None:
+                logger.info("🥷 MT5 jest już zainicjalizowany")
+                mt5.shutdown()
+                logger.info("🥷 Zamknięto poprzednią sesję MT5")
+            
+            # Próba inicjalizacji MT5 bez ścieżki
+            logger.info("🥷 Próba inicjalizacji MT5...")
+            
             if not mt5.initialize():
                 blad = mt5.last_error()
                 logger.error(f"❌ Nie udało się zainicjalizować MT5: {blad}")
                 wynik["blad"] = str(blad)
                 return wynik
+            
+            logger.info("🥷 MT5 zainicjalizowany pomyślnie")
                 
             # Logowanie do konta
             login = int(os.getenv('MT5_LOGIN'))
             haslo = os.getenv('MT5_PASSWORD')
             serwer = os.getenv('MT5_SERVER')
+            
+            logger.info(f"🥷 Próba logowania do MT5 - login: {login}, serwer: {serwer}")
             
             if not mt5.login(login, haslo, serwer):
                 blad = mt5.last_error()
