@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from .modele import (
     Base, Transakcja, Pozycja, HistoriaCen, 
     Wiadomosc, SesjaHandlowa, StatusRynku, 
-    Aktyw, MetrykiHandlu
+    Aktyw, MetrykiHandlu, KalendarzEkonomiczny
 )
 
 logger = logging.getLogger(__name__)
@@ -364,4 +364,47 @@ class BazaDanych:
                 
         except SQLAlchemyError as e:
             self.logger.error(f"❌ Błąd pobierania metryk: {str(e)}")
-            return [] 
+            return []
+            
+    def dodaj_wydarzenie_kalendarz(self, dane: Dict[str, Any]) -> None:
+        """
+        Dodaje wydarzenie z kalendarza ekonomicznego do bazy.
+        
+        Args:
+            dane: Słownik z danymi wydarzenia
+        """
+        try:
+            wydarzenie = KalendarzEkonomiczny(
+                timestamp=dane['timestamp'],
+                event_id=dane['event_id'],
+                nazwa=dane['nazwa'],
+                waluta=dane['waluta'],
+                kraj=dane['kraj'],
+                waznosc=dane['waznosc'],
+                wartosc_aktualna=dane.get('wartosc_aktualna'),
+                wartosc_prognoza=dane.get('wartosc_prognoza'),
+                wartosc_poprzednia=dane.get('wartosc_poprzednia'),
+                rewizja=dane.get('rewizja')
+            )
+            
+            # Sprawdź czy wydarzenie już istnieje
+            istniejace = self.Session().query(KalendarzEkonomiczny).filter_by(
+                timestamp=dane['timestamp'],
+                event_id=dane['event_id']
+            ).first()
+            
+            if istniejace:
+                # Aktualizuj istniejące
+                for key, value in dane.items():
+                    if hasattr(istniejace, key):
+                        setattr(istniejace, key, value)
+            else:
+                # Dodaj nowe
+                self.Session().add(wydarzenie)
+                
+            self.Session().commit()
+            
+        except Exception as e:
+            self.logger.error(f"❌ Błąd dodawania wydarzenia do kalendarza: {str(e)}")
+            self.Session().rollback()
+            raise 

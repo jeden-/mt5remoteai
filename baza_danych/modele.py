@@ -4,7 +4,7 @@ Moduł zawierający modele (tabele) bazy danych.
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, Float, String, DateTime, Enum, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, Float, String, DateTime, Enum, ForeignKey, Boolean, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 import enum
@@ -152,4 +152,92 @@ class MetrykiHandlu(Base):
     profit_factor = Column(Float, default=0.0)  # Stosunek zysków do strat
     sharp_ratio = Column(Float, default=0.0)  # Współczynnik Sharpe'a
     max_drawdown = Column(Float, default=0.0)  # Maksymalne obsunięcie kapitału
-    max_drawdown_percent = Column(Float, default=0.0)  # Maksymalne obsunięcie w procentach 
+    max_drawdown_percent = Column(Float, default=0.0)  # Maksymalne obsunięcie w procentach
+
+class StatusSynchronizacji(enum.Enum):
+    """Status synchronizacji danych."""
+    W_TOKU = "W_TOKU"
+    ZAKONCZONA = "ZAKONCZONA"
+    BLAD = "BLAD"
+
+class SynchronizacjaDanych(Base):
+    """Model śledzący synchronizację danych z MT5."""
+    
+    __tablename__ = "synchronizacja_danych"
+    
+    id = Column(Integer, primary_key=True)
+    timestamp_start = Column(DateTime, nullable=False, default=datetime.utcnow)
+    timestamp_koniec = Column(DateTime)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False)
+    zakres_od = Column(DateTime, nullable=False)
+    zakres_do = Column(DateTime, nullable=False)
+    status = Column(Enum(StatusSynchronizacji), nullable=False, default=StatusSynchronizacji.W_TOKU)
+    liczba_rekordow = Column(Integer, default=0)
+    blad = Column(String)
+    
+    __table_args__ = (
+        Index('idx_sync_symbol_tf', 'symbol', 'timeframe'),
+    )
+
+class Cache(Base):
+    """Model cache'u dla często używanych danych."""
+    
+    __tablename__ = "cache"
+    
+    id = Column(Integer, primary_key=True)
+    klucz = Column(String, nullable=False, unique=True)
+    wartosc = Column(String, nullable=False)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    wygasa = Column(DateTime)
+    
+    __table_args__ = (
+        Index('idx_cache_klucz', 'klucz'),
+        Index('idx_cache_wygasa', 'wygasa'),
+    )
+
+class ZadanieAktualizacji(Base):
+    """Model zadań aktualizacji danych."""
+    
+    __tablename__ = "zadania_aktualizacji"
+    
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False)
+    typ = Column(String, nullable=False)  # np. 'historia_cen', 'sesje', 'status'
+    priorytet = Column(Integer, default=1)
+    wykonane = Column(Boolean, default=False)
+    blad = Column(String)
+    
+    __table_args__ = (
+        Index('idx_zadania_status', 'wykonane', 'priorytet'),
+    )
+
+class KalendarzEkonomiczny(Base):
+    """Model dla wydarzeń z kalendarza ekonomicznego."""
+    
+    __tablename__ = 'kalendarz_ekonomiczny'
+    
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False)
+    event_id = Column(Integer, nullable=False)
+    nazwa = Column(String, nullable=False)
+    waluta = Column(String, nullable=False)
+    kraj = Column(String, nullable=False)
+    waznosc = Column(Integer, nullable=False)
+    wartosc_aktualna = Column(Float)
+    wartosc_prognoza = Column(Float)
+    wartosc_poprzednia = Column(Float)
+    rewizja = Column(Float)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_kalendarz_timestamp', 'timestamp'),
+        Index('idx_kalendarz_event', 'event_id'),
+        Index('idx_kalendarz_waluta', 'waluta'),
+        Index('idx_kalendarz_kraj', 'kraj'),
+        Index('idx_kalendarz_waznosc', 'waznosc')
+    ) 
