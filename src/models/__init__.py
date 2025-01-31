@@ -1,0 +1,3 @@
+"""
+Pakiet zawierający modele danych.
+""" 

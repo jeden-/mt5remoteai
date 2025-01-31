@@ -1,103 +1,88 @@
-# NikkeiNinja 🥷
+# MT5 Remote AI 🤖
 
-System do analizy sentymentu i automatycznego tradingu na indeksie Nikkei 225, wykorzystujący dane z mediów społecznościowych, analizę techniczną i zaawansowane modele AI.
+System automatycznego tradingu łączący MetaTrader 5 z modelami AI (Ollama i Claude).
 
-## Funkcjonalności 🚀
+## 🎯 Funkcjonalności
 
-- Integracja z MetaTrader 5 (MT5)
-  - Pobieranie danych historycznych i aktualnych
-  - Rzeczywisty wolumen transakcji (`real_volume`)
-  - Synchronizacja z bazą danych i cache
-- Analiza techniczna
-  - Wskaźniki cenowe (RSI, MACD, SMA, EMA)
-  - Wskaźniki wolumenowe (OBV, ADI, CMF, VWAP)
-  - Wykrywanie formacji świecowych
-  - Generowanie sygnałów handlowych
-- System RAG (Retrieval Augmented Generation)
-  - Lokalna baza wiedzy ChromaDB
-  - Wyszukiwanie semantyczne
-  - Filtrowanie po metadanych
-- Scraping danych z mediów społecznościowych (Twitter, Reddit)
-- Analiza sentymentu z wykorzystaniem Anthropic Claude API
-- Automatyczne sugestie tradingowe (KUPUJ/SPRZEDAJ/CZEKAJ)
-- Logowanie operacji i monitorowanie wydajności
-- Asynchroniczne przetwarzanie danych
+- Integracja z MetaTrader 5
+- Analiza techniczna (SMA, EMA, RSI)
+- Analiza AI z wykorzystaniem:
+  - Ollama (model lokalny)
+  - Claude (API Anthropic)
+- Zarządzanie ryzykiem
+- Automatyczne wykonywanie zleceń
+- Logowanie operacji i błędów
+- Baza danych PostgreSQL
+- Testy jednostkowe i integracyjne
 
-## Architektura 🏗️
+## 🚀 Instalacja
 
-### Moduły
-
-- `handel/`
-  - `operacje_mt5.py` - Integracja z MT5 i analiza techniczna
-  - `strategie.py` - Strategie tradingowe
-- `baza_danych/`
-  - `modele.py` - Modele danych PostgreSQL
-  - `synchronizacja.py` - Synchronizacja danych MT5
-  - `cache.py` - System cachowania
-- `ai/`
-  - `llm_local.py` - Integracja z Anthropic API do analizy tekstu
-  - `scraper_social.py` - Pobieranie danych z mediów społecznościowych
-  - `system_rag.py` - System RAG oparty na ChromaDB
-
-### Technologie
-
-- Python 3.9+
-- PostgreSQL 15+
-- MetaTrader 5 (MT5)
-- ChromaDB dla systemu RAG
-- Anthropic Claude API (model claude-3-opus-20240229)
-- pytest dla testów
-- asyncio dla operacji asynchronicznych
-
-## Wymagania 📋
-
-- Python 3.9+
-- PostgreSQL 15+
-- MetaTrader 5
-- Klucz API Anthropic
-- Dostęp do API mediów społecznościowych
-
-## Konfiguracja 🔧
-
-1. Sklonuj repozytorium
-2. Utwórz plik `.env` z kluczami API i konfiguracją:
-```
-# Baza danych
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=nikkeininja
-DB_USER=ninja
-DB_PASSWORD=ninja
-
-# MT5
-MT5_LOGIN=your_login
-MT5_PASSWORD=your_password
-MT5_SERVER=your_server
-
-# Anthropic
-ANTHROPIC_API_KEY=your_key_here
-```
-
-## Testy 🧪
-
-Projekt zawiera kompleksowe testy:
-- Testy jednostkowe dla analizy technicznej
-- Testy integracyjne dla MT5 i bazy danych
-- Testy systemu RAG i scrapera
-- Mockowanie zewnętrznych API
-
-Uruchomienie testów:
+1. Sklonuj repozytorium:
 ```bash
-pytest
+git clone https://github.com/jeden-/mt5remoteai.git
+cd mt5remoteai
 ```
 
-## Konwencje 📝
+2. Stwórz i aktywuj środowisko wirtualne:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate     # Windows
+```
 
-- Język: Polski (docstringi, komentarze, nazwy zmiennych)
-- Type hints obowiązkowe
-- Docstringi dla wszystkich klas i metod
-- Emoji w logach:
-  - 🥷 - operacje ninja
-  - ⚠️ - ostrzeżenia
-  - ❌ - błędy
-- PEP 8 (max 120 znaków) 
+3. Zainstaluj zależności:
+```bash
+pip install -r requirements.txt
+```
+
+4. Skonfiguruj zmienne środowiskowe w pliku `.env`:
+```
+MT5_LOGIN=twój_login
+MT5_PASSWORD=twoje_hasło
+MT5_SERVER=nazwa_serwera
+ANTHROPIC_API_KEY=klucz_api_claude
+OLLAMA_API_URL=http://localhost:11434
+DB_CONNECTION_STRING=postgresql://user:pass@localhost:5432/dbname
+```
+
+## 💻 Użycie
+
+1. Uruchom testy demo:
+```bash
+python main.py --mode demo --symbols EURUSD,GBPUSD
+```
+
+2. Uruchom w trybie live:
+```bash
+python main.py --mode live --symbols EURUSD
+```
+
+## 📊 Struktura projektu
+
+```
+src/
+├── connectors/          # Konektory do zewnętrznych serwisów
+├── database/           # Obsługa bazy danych
+├── demo_test/         # Testy na demo
+├── interfaces/        # Interfejsy
+├── models/           # Modele danych
+├── strategies/       # Strategie tradingowe
+└── utils/           # Narzędzia pomocnicze
+
+tests/               # Testy
+```
+
+## 🧪 Testy
+
+Uruchom testy:
+```bash
+pytest tests/ -v --cov=src
+```
+
+## 📝 Licencja
+
+MIT
+
+## 👥 Autorzy
+
+- [@jeden-](https://github.com/jeden-) 

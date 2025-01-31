@@ -23,7 +23,6 @@ wheels/
 # Środowisko wirtualne
 .env
 .venv
-env/
 venv/
 ENV/
 
@@ -33,23 +32,24 @@ ENV/
 *.swp
 *.swo
 
-# Logi i dane
+# Logi i cache
+logs/
 *.log
-*.sqlite3
-*.db
-
-# Testy i coverage
 .coverage
 htmlcov/
 .pytest_cache/
-.tox/
-.coverage.*
-coverage.xml
-*.cover
+.mypy_cache/
 
-# Dokumentacja
-docs/_build/
-
-# Pliki systemowe
+# System
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Pliki konfiguracyjne
+*.env*
+config.yaml
+settings.json
+
+# Inne
+*.bak
+*.tmp
+*.temp 
