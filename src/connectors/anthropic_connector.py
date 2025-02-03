@@ -7,20 +7,21 @@ from typing import Dict, Any
 import asyncio
 from loguru import logger
 
-from ..utils.config import Config
-
 
 class AnthropicConnector:
     """Klasa odpowiedzialna za komunikację z API Anthropic."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Dict[str, Any]):
         """
         Inicjalizacja konektora Anthropic.
 
         Args:
-            config: Obiekt konfiguracyjny z kluczem API
+            config: Słownik z konfiguracją zawierający klucz API w sekcji 'api'
         """
-        self.client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        if 'api' not in config or 'anthropic_key' not in config['api']:
+            raise ValueError("Brak klucza API Anthropic w konfiguracji")
+            
+        self.client = Anthropic(api_key=config['api']['anthropic_key'])
         
     async def analyze_market_conditions(self, market_data: Dict[str, Any], prompt_template: str) -> str:
         """

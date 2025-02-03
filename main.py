@@ -2,6 +2,7 @@
 Główny moduł aplikacji MT5 Remote AI.
 """
 import asyncio
+from datetime import datetime, timedelta
 from loguru import logger
 
 from src.utils.config import Config
@@ -10,6 +11,8 @@ from src.connectors.mt5_connector import MT5Connector
 from src.connectors.ollama_connector import OllamaConnector
 from src.connectors.anthropic_connector import AnthropicConnector
 from src.strategies.basic_strategy import BasicStrategy
+from src.backtest.backtester import Backtester
+from src.backtest.visualizer import BacktestVisualizer
 
 
 async def main() -> None:
@@ -79,5 +82,63 @@ async def main() -> None:
         logger.info("🥷 System został zatrzymany")
 
 
+async def run_backtest():
+    """Uruchamia backtest strategii."""
+    logger.info("🥷 Rozpoczynam backtest strategii")
+    
+    # Inicjalizacja loggera i konfiguracji
+    trading_logger = TradingLogger()
+    config = Config.load_config()
+    
+    # Inicjalizacja strategii
+    strategy = BasicStrategy(
+        mt5_connector=None,  # Nie potrzebujemy połączenia w backteście
+        ollama_connector=None,
+        anthropic_connector=None,
+        db_handler=None,
+        config={
+            'max_position_size': 0.1,
+            'max_risk_per_trade': 0.02,
+            'allowed_symbols': ['EURUSD']
+        }
+    )
+    
+    # Utworzenie backtestera
+    backtester = Backtester(
+        strategy=strategy,
+        symbol='EURUSD',
+        timeframe='1H',
+        initial_capital=10000,
+        start_date=datetime.now() - timedelta(days=30),
+        logger=trading_logger
+    )
+    
+    try:
+        # Uruchomienie backtestu
+        results = await backtester.run_backtest()
+        
+        # Wizualizacja wyników
+        visualizer = BacktestVisualizer(backtester.data, backtester.trades)
+        visualizer.save_dashboard('backtest_results.html')
+        
+        logger.info("\n📊 WYNIKI BACKTESTU:")
+        for metric, value in results.items():
+            logger.info(f"{metric}: {value}")
+            
+    except Exception as e:
+        logger.error(f"❌ Błąd podczas backtestingu: {str(e)}")
+        raise
+
+
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    # Dodaj opcję uruchomienia backtestu
+    import argparse
+    parser = argparse.ArgumentParser(description="MT5 Remote AI Trading System")
+    parser.add_argument("--mode", choices=["live", "demo", "backtest"], default="demo", help="Tryb działania")
+    parser.add_argument("--symbols", type=str, default="EURUSD", help="Symbole do handlu (oddzielone przecinkami)")
+    args = parser.parse_args()
+    
+    if args.mode == "backtest":
+        asyncio.run(run_backtest())
+    else:
+        asyncio.run(main()) 

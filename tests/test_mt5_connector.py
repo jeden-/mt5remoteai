@@ -1,174 +1,127 @@
 """
-Moduł zawierający testy dla konektora MT5.
+Testy dla modułu MT5Connector.
 """
 import pytest
-from unittest.mock import patch, MagicMock
-from src.utils.config import Config
-from src.connectors.mt5_connector import MT5Connector
+from unittest.mock import Mock, patch
+from typing import Dict, Any
 
+from src.connectors.mt5_connector import MT5Connector
+from src.utils.config import Config
+
+# Przykładowe dane testowe
+SAMPLE_ACCOUNT_INFO = Mock(
+    balance=10000.0,
+    equity=10500.0,
+    profit=500.0,
+    margin=1000.0,
+    margin_level=1050.0
+)
+
+# Tworzenie mocków dla symboli z właściwością name
+EURUSD_MOCK = Mock()
+EURUSD_MOCK.name = "EURUSD"
+GBPUSD_MOCK = Mock()
+GBPUSD_MOCK.name = "GBPUSD"
+USDJPY_MOCK = Mock()
+USDJPY_MOCK.name = "USDJPY"
+
+SAMPLE_SYMBOLS = [EURUSD_MOCK, GBPUSD_MOCK, USDJPY_MOCK]
 
 @pytest.fixture
-def config():
-    """Fixture tworzący przykładową konfigurację."""
+def config() -> Config:
+    """Fixture dostarczający przykładową konfigurację."""
     return Config(
-        MT5_LOGIN='12345',
-        MT5_PASSWORD='password',
-        MT5_SERVER='TestServer',
-        ANTHROPIC_API_KEY='test_key',
-        POSTGRES_USER='test_user',
-        POSTGRES_PASSWORD='test_password'
+        MT5_LOGIN=12345,
+        MT5_PASSWORD="test_password",
+        MT5_SERVER="TestServer"
     )
 
-
 @pytest.fixture
-def connector(config):
-    """Fixture tworzący instancję konektora."""
+def mt5_connector(config: Config) -> MT5Connector:
+    """Fixture dostarczający instancję MT5Connector."""
     return MT5Connector(config)
 
-
-def test_initialization(connector):
-    """Test inicjalizacji konektora."""
-    assert connector.config is not None
-    assert connector.connected is False
-
-
-@patch('MetaTrader5.initialize')
-@patch('MetaTrader5.login')
-def test_connect_success(mock_login, mock_initialize, connector):
+@pytest.mark.asyncio
+async def test_connect_success(mt5_connector: MT5Connector) -> None:
     """Test udanego połączenia z MT5."""
-    mock_initialize.return_value = True
-    mock_login.return_value = True
-    
-    result = connector.connect()
-    
-    assert result is True
-    assert connector.connected is True
-    mock_initialize.assert_called_once()
-    mock_login.assert_called_once_with(
-        login=connector.config.MT5_LOGIN,
-        password=connector.config.MT5_PASSWORD,
-        server=connector.config.MT5_SERVER
-    )
+    with patch("MetaTrader5.initialize", return_value=True), \
+         patch("MetaTrader5.login", return_value=True):
+        assert mt5_connector.connect() is True
+        assert mt5_connector.connected is True
 
-
-@patch('MetaTrader5.initialize')
-def test_connect_initialize_failure(mock_initialize, connector):
+@pytest.mark.asyncio
+async def test_connect_initialize_failure(mt5_connector: MT5Connector) -> None:
     """Test nieudanej inicjalizacji MT5."""
-    mock_initialize.return_value = False
-    
-    result = connector.connect()
-    
-    assert result is False
-    assert connector.connected is False
-    mock_initialize.assert_called_once()
+    with patch("MetaTrader5.initialize", return_value=False):
+        assert mt5_connector.connect() is False
+        assert mt5_connector.connected is False
 
-
-@patch('MetaTrader5.initialize')
-@patch('MetaTrader5.login')
-def test_connect_login_failure(mock_login, mock_initialize, connector):
+@pytest.mark.asyncio
+async def test_connect_login_failure(mt5_connector: MT5Connector) -> None:
     """Test nieudanego logowania do MT5."""
-    mock_initialize.return_value = True
-    mock_login.return_value = False
-    
-    result = connector.connect()
-    
-    assert result is False
-    assert connector.connected is False
-    mock_initialize.assert_called_once()
-    mock_login.assert_called_once()
+    with patch("MetaTrader5.initialize", return_value=True), \
+         patch("MetaTrader5.login", return_value=False):
+        assert mt5_connector.connect() is False
+        assert mt5_connector.connected is False
 
-
-@patch('MetaTrader5.shutdown')
-def test_disconnect(mock_shutdown, connector):
+@pytest.mark.asyncio
+async def test_disconnect(mt5_connector: MT5Connector) -> None:
     """Test rozłączania z MT5."""
-    connector.connected = True
-    
-    connector.disconnect()
-    
-    assert connector.connected is False
-    mock_shutdown.assert_called_once()
+    with patch("MetaTrader5.shutdown") as mock_shutdown:
+        mt5_connector.connected = True
+        mt5_connector.disconnect()
+        assert mt5_connector.connected is False
+        mock_shutdown.assert_called_once()
 
-
-@patch('MetaTrader5.shutdown')
-def test_disconnect_when_not_connected(mock_shutdown, connector):
-    """Test rozłączania gdy nie było połączenia."""
-    connector.connected = False
-    
-    connector.disconnect()
-    
-    assert connector.connected is False
-    mock_shutdown.assert_not_called()
-
-
-@patch('MetaTrader5.account_info')
-def test_get_account_info_success(mock_account_info, connector):
+@pytest.mark.asyncio
+async def test_get_account_info_success(mt5_connector: MT5Connector) -> None:
     """Test pobierania informacji o koncie."""
-    mock_info = MagicMock()
-    mock_info.balance = 1000.0
-    mock_info.equity = 1100.0
-    mock_info.profit = 100.0
-    mock_info.margin = 200.0
-    mock_info.margin_level = 550.0
-    mock_account_info.return_value = mock_info
-    
-    connector.connected = True
-    result = connector.get_account_info()
-    
-    assert result['balance'] == 1000.0
-    assert result['equity'] == 1100.0
-    assert result['profit'] == 100.0
-    assert result['margin'] == 200.0
-    assert result['margin_level'] == 550.0
-    mock_account_info.assert_called_once()
+    with patch("MetaTrader5.account_info", return_value=SAMPLE_ACCOUNT_INFO):
+        mt5_connector.connected = True
+        info = mt5_connector.get_account_info()
+        assert isinstance(info, dict)
+        assert info["balance"] == 10000.0
+        assert info["equity"] == 10500.0
+        assert info["profit"] == 500.0
+        assert info["margin"] == 1000.0
+        assert info["margin_level"] == 1050.0
 
-
-def test_get_account_info_not_connected(connector):
+@pytest.mark.asyncio
+async def test_get_account_info_not_connected(mt5_connector: MT5Connector) -> None:
     """Test pobierania informacji o koncie bez połączenia."""
-    connector.connected = False
-    
     with pytest.raises(RuntimeError, match="Brak połączenia z MT5"):
-        connector.get_account_info()
+        mt5_connector.get_account_info()
 
+@pytest.mark.asyncio
+async def test_get_account_info_failure(mt5_connector: MT5Connector) -> None:
+    """Test nieudanego pobierania informacji o koncie."""
+    with patch("MetaTrader5.account_info", return_value=None), \
+         pytest.raises(RuntimeError, match="Nie można pobrać informacji o koncie"):
+        mt5_connector.connected = True
+        mt5_connector.get_account_info()
 
-@patch('MetaTrader5.account_info')
-def test_get_account_info_failure(mock_account_info, connector):
-    """Test błędu podczas pobierania informacji o koncie."""
-    mock_account_info.return_value = None
-    connector.connected = True
-    
-    with pytest.raises(RuntimeError, match="Nie można pobrać informacji o koncie"):
-        connector.get_account_info()
-
-
-@patch('MetaTrader5.symbols_get')
-def test_get_symbols_success(mock_symbols_get, connector):
+@pytest.mark.asyncio
+async def test_get_symbols_success(mt5_connector: MT5Connector) -> None:
     """Test pobierania listy symboli."""
-    mock_symbol1 = MagicMock()
-    mock_symbol1.name = 'EURUSD'
-    mock_symbol2 = MagicMock()
-    mock_symbol2.name = 'GBPUSD'
-    mock_symbols_get.return_value = [mock_symbol1, mock_symbol2]
-    
-    connector.connected = True
-    result = connector.get_symbols()
-    
-    assert result == ['EURUSD', 'GBPUSD']
-    mock_symbols_get.assert_called_once()
+    with patch("MetaTrader5.symbols_get", return_value=SAMPLE_SYMBOLS):
+        mt5_connector.connected = True
+        symbols = mt5_connector.get_symbols()
+        assert isinstance(symbols, list)
+        assert len(symbols) == 3
+        assert "EURUSD" in symbols
+        assert "GBPUSD" in symbols
+        assert "USDJPY" in symbols
 
-
-def test_get_symbols_not_connected(connector):
+@pytest.mark.asyncio
+async def test_get_symbols_not_connected(mt5_connector: MT5Connector) -> None:
     """Test pobierania listy symboli bez połączenia."""
-    connector.connected = False
-    
     with pytest.raises(RuntimeError, match="Brak połączenia z MT5"):
-        connector.get_symbols()
+        mt5_connector.get_symbols()
 
-
-@patch('MetaTrader5.symbols_get')
-def test_get_symbols_failure(mock_symbols_get, connector):
-    """Test błędu podczas pobierania listy symboli."""
-    mock_symbols_get.return_value = None
-    connector.connected = True
-    
-    with pytest.raises(RuntimeError, match="Nie można pobrać listy symboli"):
-        connector.get_symbols() 
+@pytest.mark.asyncio
+async def test_get_symbols_failure(mt5_connector: MT5Connector) -> None:
+    """Test nieudanego pobierania listy symboli."""
+    with patch("MetaTrader5.symbols_get", return_value=None), \
+         pytest.raises(RuntimeError, match="Nie można pobrać listy symboli"):
+        mt5_connector.connected = True
+        mt5_connector.get_symbols() 

@@ -14,7 +14,8 @@ MetaTrader5==5.0.45
 anthropic==0.8.1
 
 # Baza danych
-psycopg2-binary==2.9.9
+asyncpg==0.29.0
+alembic==1.13.1
 
 # API
 fastapi==0.109.2
@@ -24,4 +25,8 @@ uvicorn==0.27.1
 python-dotenv==1.0.1
 httpx==0.26.0
 pandas==2.2.0
-numpy==1.26.3 
+numpy==1.26.3
+
+# RAG
+chromadb==0.4.22
+sentence-transformers==2.5.1 

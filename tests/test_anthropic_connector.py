@@ -5,23 +5,16 @@ import pytest
 from unittest.mock import patch, MagicMock, Mock
 from anthropic import AuthenticationError
 from src.connectors.anthropic_connector import AnthropicConnector
-from src.utils.config import Config
 
 
 @pytest.fixture
 def config():
     """Fixture tworzący przykładową konfigurację."""
-    return Config(
-        MT5_LOGIN='12345',
-        MT5_PASSWORD='password',
-        MT5_SERVER='TestServer',
-        ANTHROPIC_API_KEY='test_key',
-        POSTGRES_USER='test_user',
-        POSTGRES_PASSWORD='test_password',
-        POSTGRES_DB='test_db',
-        POSTGRES_HOST='localhost',
-        POSTGRES_PORT='5432'
-    )
+    return {
+        "api": {
+            "anthropic_key": "test_key"
+        }
+    }
 
 
 @pytest.fixture
@@ -45,6 +38,13 @@ def test_initialization(config):
     """Test inicjalizacji konektora."""
     connector = AnthropicConnector(config)
     assert connector.client is not None
+
+
+def test_initialization_missing_api_key():
+    """Test inicjalizacji bez klucza API."""
+    with pytest.raises(ValueError) as exc_info:
+        AnthropicConnector({})
+    assert "Brak klucza API Anthropic w konfiguracji" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
