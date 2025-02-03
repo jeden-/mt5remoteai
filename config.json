@@ -1,0 +1,29 @@
+{
+    "DB_HOST": "localhost",
+    "DB_PORT": 5432,
+    "DB_NAME": "mt5remotetest",
+    "DB_USER": "mt5remote",
+    "DB_PASSWORD": "mt5remote",
+    "DB_POOL_MIN_SIZE": 5,
+    "DB_POOL_MAX_SIZE": 20,
+    "DB_COMMAND_TIMEOUT": 60,
+    "DB_CONNECT_TIMEOUT": 30,
+    "DB_MAX_RETRIES": 3,
+    "DB_RETRY_INTERVAL": 5,
+    
+    "MT5_SERVER": "",
+    "MT5_LOGIN": 0,
+    "MT5_PASSWORD": "",
+    
+    "API_HOST": "localhost",
+    "API_PORT": 8000,
+    "API_DEBUG": true,
+    
+    "LOG_LEVEL": "DEBUG",
+    "LOG_FILE": "mt5remoteai.log",
+    
+    "RAG_MODEL": "all-MiniLM-L6-v2",
+    "RAG_PERSIST_DIR": "market_memory",
+    
+    "ANTHROPIC_API_KEY": ""
+} 
