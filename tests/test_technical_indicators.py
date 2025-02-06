@@ -421,3 +421,224 @@ def test_calculate_pivot_points(indicators, sample_data):
             low=sample_data['low'].iloc[-1],
             close=sample_data['close'].iloc[-1]
         ) 
+
+def test_detect_patterns_detailed(indicators):
+    """Test szczegółowy wykrywania formacji świecowych."""
+    # Test Doji - bardzo mały korpus w porównaniu do cieni
+    doji_data = pd.DataFrame({
+        'open': [1.1500, 1.1501],
+        'high': [1.1520, 1.1520],
+        'low': [1.1480, 1.1480],
+        'close': [1.1501, 1.1500],  # Korpus 0.0001 vs cienie 0.004
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(doji_data)
+    assert patterns['doji'] == True
+    
+    # Test Hammer - długi dolny cień, mały korpus i bardzo mały górny cień
+    hammer_data = pd.DataFrame({
+        'open': [1.1500, 1.1500],
+        'high': [1.1520, 1.1510],  # Mały górny cień
+        'low': [1.1400, 1.1400],   # Długi dolny cień
+        'close': [1.1510, 1.1505], # Mały korpus
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(hammer_data)
+    assert patterns['hammer'] == True
+    
+    # Test Shooting Star - długi górny cień, mały korpus i bardzo mały dolny cień
+    shooting_star_data = pd.DataFrame({
+        'open': [1.1500, 1.1520],  # Korpus = 0.002 (1.1520 - 1.1500)
+        'high': [1.1520, 1.1600],  # Górny cień = 0.008 (1.1600 - 1.1520) > 2 * korpus
+        'low': [1.1480, 1.1499],   # Dolny cień = 0.001 (1.1500 - 1.1499) < korpus
+        'close': [1.1510, 1.1500], # Świeca spadkowa
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(shooting_star_data)
+    assert patterns['shooting_star'] == True
+    
+    # Test Bullish Engulfing - druga świeca całkowicie pochłania pierwszą
+    bullish_engulfing_data = pd.DataFrame({
+        'open': [1.1520, 1.1480],  # Druga świeca otwiera się niżej
+        'high': [1.1530, 1.1540],
+        'low': [1.1490, 1.1470],
+        'close': [1.1500, 1.1530], # Druga świeca zamyka się wyżej
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(bullish_engulfing_data)
+    assert patterns['engulfing_bullish'] == True
+    
+    # Test Bearish Engulfing - druga świeca całkowicie pochłania pierwszą
+    bearish_engulfing_data = pd.DataFrame({
+        'open': [1.1480, 1.1520],  # Druga świeca otwiera się wyżej
+        'high': [1.1500, 1.1530],
+        'low': [1.1470, 1.1460],
+        'close': [1.1490, 1.1470], # Druga świeca zamyka się niżej
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(bearish_engulfing_data)
+    assert patterns['engulfing_bearish'] == True
+
+def test_detect_patterns_validation(indicators):
+    """Test walidacji danych wejściowych dla wykrywania wzorców."""
+    # Test nieprawidłowego typu danych
+    with pytest.raises(ValueError, match="Dane wejściowe muszą być typu pandas DataFrame"):
+        indicators.detect_patterns([1, 2, 3])
+    
+    # Test nieprawidłowego okna
+    with pytest.raises(ValueError, match="Okno musi być większe od 0"):
+        indicators.detect_patterns(pd.DataFrame(), window=0)
+    
+    # Test brakujących kolumn
+    with pytest.raises(KeyError, match="DataFrame musi zawierać kolumny"):
+        indicators.detect_patterns(pd.DataFrame({'close': [1, 2, 3]}))
+
+def test_detect_patterns_edge_cases(indicators):
+    """Test przypadków brzegowych dla wykrywania wzorców."""
+    # Test z jedną świecą
+    single_candle = pd.DataFrame({
+        'open': [1.1500],
+        'high': [1.1520],
+        'low': [1.1480],
+        'close': [1.1510],
+        'volume': [1000]
+    }, index=pd.date_range(start='2025-01-29', periods=1, freq='h'))
+    
+    patterns = indicators.detect_patterns(single_candle)
+    assert isinstance(patterns, dict)
+    assert len(patterns) == 5
+    assert not any(patterns.values())  # Żaden wzorzec nie powinien być wykryty
+    
+    # Test z identycznymi cenami
+    flat_data = pd.DataFrame({
+        'open': [1.1500, 1.1500],
+        'high': [1.1500, 1.1500],
+        'low': [1.1500, 1.1500],
+        'close': [1.1500, 1.1500],
+        'volume': [1000, 1000]
+    }, index=pd.date_range(start='2025-01-29', periods=2, freq='h'))
+    
+    patterns = indicators.detect_patterns(flat_data)
+    assert patterns['doji'] == True
+    assert not any(v for k, v in patterns.items() if k != 'doji') 
+
+def test_input_validation_edge_cases(indicators):
+    """Test walidacji danych wejściowych dla skrajnych przypadków."""
+    # Test dla pustego DataFrame
+    empty_df = pd.DataFrame()
+    with pytest.raises(ValueError):
+        indicators.calculate_all(empty_df)
+    
+    # Test dla DataFrame bez wymaganych kolumn
+    invalid_df = pd.DataFrame({'wrong_column': [1, 2, 3]})
+    with pytest.raises(KeyError):
+        indicators.calculate_all(invalid_df)
+    
+    # Test dla DataFrame z nieprawidłowymi typami danych
+    invalid_types_df = pd.DataFrame({
+        'open': ['invalid', 'data'],
+        'high': [1.1, 1.2],
+        'low': [1.0, 1.1],
+        'close': [1.1, 1.2],
+        'volume': [1000, 1000]
+    })
+    with pytest.raises(ValueError):
+        indicators.calculate_sma(pd.Series(['invalid', 'data']), period=5)
+
+def test_pivot_points_detailed(indicators):
+    """Test szczegółowy obliczania punktów pivot."""
+    # Przygotowanie danych testowych
+    high = 1.1580
+    low = 1.1450
+    close = 1.1500
+    
+    # Obliczenie punktów pivot
+    pp, r1, r2, s1, s2 = indicators.calculate_pivot_points(high, low, close)
+    
+    # Sprawdzenie czy wszystkie poziomy są obliczone
+    assert isinstance(pp, float)
+    assert isinstance(r1, float)
+    assert isinstance(r2, float)
+    assert isinstance(s1, float)
+    assert isinstance(s2, float)
+    
+    # Sprawdzenie poprawności obliczeń
+    expected_pp = (high + low + close) / 3
+    assert abs(pp - expected_pp) < 0.0001
+    
+    # Sprawdzenie relacji między poziomami
+    assert s2 < s1 < pp < r1 < r2
+
+def test_divergence_detection(indicators):
+    """Test wykrywania dywergencji."""
+    # Przygotowanie danych testowych dla dywergencji byczej
+    bullish_data = pd.DataFrame({
+        'open': [1.1500, 1.1480, 1.1460, 1.1440, 1.1420],
+        'high': [1.1520, 1.1500, 1.1480, 1.1460, 1.1440],
+        'low': [1.1480, 1.1460, 1.1440, 1.1420, 1.1400],
+        'close': [1.1510, 1.1470, 1.1450, 1.1430, 1.1410],
+        'volume': [1000] * 5
+    }, index=pd.date_range(start='2025-01-29', periods=5, freq='h'))
+    
+    # Obliczenie RSI dla danych
+    rsi_values = indicators.calculate_rsi(bullish_data['close'], period=14)
+    bullish_data['RSI'] = rsi_values
+    
+    # Test wykrywania dywergencji
+    divergence = indicators.detect_divergence(
+        df=bullish_data,
+        price_col='close',
+        indicator_col='RSI',
+        window=5
+    )
+    
+    assert isinstance(divergence, dict)
+    assert 'bullish_divergence' in divergence
+    assert 'bearish_divergence' in divergence
+    
+    # Test dla nieprawidłowych danych wejściowych
+    with pytest.raises(ValueError):
+        indicators.detect_divergence(
+            df=pd.DataFrame(),
+            price_col='close',
+            indicator_col='RSI',
+            window=5
+        )
+    
+    # Test dla brakujących kolumn
+    with pytest.raises(KeyError):
+        indicators.detect_divergence(
+            df=pd.DataFrame({'wrong_col': [1, 2, 3]}),
+            price_col='close',
+            indicator_col='RSI',
+            window=5
+        )
+
+def test_helper_functions_edge_cases(indicators):
+    """Test funkcji pomocniczych dla skrajnych przypadków."""
+    # Test dla pustej serii
+    empty_series = pd.Series([])
+    with pytest.raises(ValueError):
+        indicators.calculate_sma(empty_series, period=5)
+    
+    # Test dla serii z wartościami NaN
+    nan_series = pd.Series([1.0, np.nan, 3.0])
+    result = indicators.calculate_sma(nan_series, period=2)
+    assert pd.isna(result.iloc[0])
+    
+    # Test dla nieprawidłowego okresu
+    data = pd.Series([1.1550, 1.1500])
+    
+    with pytest.raises(ValueError):
+        indicators.calculate_sma(data, period=0)
+    
+    with pytest.raises(ValueError):
+        indicators.calculate_sma(data, period=-1)
+    
+    with pytest.raises(ValueError):
+        indicators.calculate_sma(data, period=len(data) + 1) 

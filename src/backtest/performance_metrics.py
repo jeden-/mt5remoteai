@@ -3,18 +3,18 @@ Moduł do obliczania metryk wydajności strategii.
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 
 @dataclass
 class TradeResult:
     """Klasa reprezentująca wynik pojedynczej transakcji."""
     entry_time: pd.Timestamp
-    exit_time: pd.Timestamp
+    exit_time: Optional[pd.Timestamp]
     entry_price: float
-    exit_price: float
+    exit_price: Optional[float]
     direction: str  # 'BUY' lub 'SELL'
-    profit: float
+    profit: Optional[float]
     size: float
 
 class PerformanceMetrics:
@@ -28,7 +28,7 @@ class PerformanceMetrics:
             trades: Lista wykonanych transakcji
             initial_capital: Początkowy kapitał
         """
-        self.trades = trades
+        self.trades = [t for t in trades if t.exit_time is not None and t.exit_price is not None and t.profit is not None]
         self.initial_capital = initial_capital
         
     def calculate_metrics(self) -> Dict[str, float]:

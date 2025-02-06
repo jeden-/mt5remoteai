@@ -166,7 +166,7 @@ class MT5Handler:
             
             # Pobierz aktualną cenę
             price = await self.get_current_price()
-            current_price = price['ask'] if direction == 'BUY' else price['bid']
+            current_price = price['data']['ask'] if direction == 'BUY' else price['data']['bid']
             
             # Walidacja poziomów SL/TP
             try:
@@ -246,7 +246,7 @@ class MT5Handler:
                 "volume": position.volume,
                 "type": close_type,
                 "position": position.ticket,
-                "price": price['bid'] if position.type == mt5.ORDER_TYPE_BUY else price['ask'],
+                "price": price['data']['bid'] if position.type == mt5.ORDER_TYPE_BUY else price['data']['ask'],
                 "deviation": 20,
                 "magic": 234000,
                 "comment": "python script close",
@@ -279,27 +279,44 @@ class MT5Handler:
                 "message": f"Wyjątek: {str(e)}"
             }
 
-    async def get_current_price(self) -> Dict[str, float]:
+    async def get_current_price(self) -> Dict[str, Any]:
         """
         Pobiera aktualną cenę instrumentu.
 
         Returns:
-            Dict zawierający bid, ask i last price
+            Dict zawierający status operacji i dane cenowe
         """
-        tick = mt5.symbol_info_tick(self.symbol)
-        return {
-            "bid": tick.bid,
-            "ask": tick.ask,
-            "last": tick.last,
-            "volume": tick.volume,
-            "time": tick.time
-        }
+        try:
+            tick = mt5.symbol_info_tick(self.symbol)
+            if tick is None:
+                self.logger.error(f"❌ Nie udało się pobrać aktualnej ceny dla {self.symbol}")
+                return {
+                    "status": "error",
+                    "message": "Nie udało się pobrać aktualnej ceny"
+                }
+
+            return {
+                "status": "success",
+                "data": {
+                    "bid": tick.bid,
+                    "ask": tick.ask,
+                    "last": tick.last,
+                    "volume": tick.volume,
+                    "time": tick.time
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Wyjątek podczas pobierania ceny: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Wyjątek: {str(e)}"
+            }
 
     async def get_historical_data(
         self,
         start_date: datetime,
         num_bars: int = 1000
-    ) -> pd.DataFrame:
+    ) -> Dict[str, Any]:
         """
         Pobiera dane historyczne.
 
@@ -308,47 +325,66 @@ class MT5Handler:
             num_bars: Liczba świec do pobrania
 
         Returns:
-            DataFrame z danymi OHLCV
-
-        Raises:
-            RuntimeError: Gdy nie uda się pobrać danych
+            Dict zawierający status operacji i dane historyczne
         """
-        rates = mt5.copy_rates_from(self.symbol, self.timeframe, start_date, num_bars)
-        
-        if rates is None:
-            self.logger.error(f"❌ Nie udało się pobrać danych historycznych dla {self.symbol}")
-            raise RuntimeError("Nie udało się pobrać danych historycznych")
+        try:
+            rates = mt5.copy_rates_from(self.symbol, self.timeframe, start_date, num_bars)
 
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('time', inplace=True)
-        
-        # Zmiana nazw kolumn na standardowe
-        df.rename(columns={
-            'tick_volume': 'volume',
-            'real_volume': 'real_volume'
-        }, inplace=True)
-        
-        self.logger.info(f"🥷 Pobrano {len(df)} świec historycznych dla {self.symbol}")
-        return df
+            if rates is None:
+                self.logger.error(f"❌ Nie udało się pobrać danych historycznych dla {self.symbol}")
+                return {
+                    "status": "error",
+                    "message": "Nie udało się pobrać danych historycznych"
+                }
+
+            df = pd.DataFrame(rates)
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            
+            return {
+                "status": "success",
+                "data": df
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Wyjątek podczas pobierania danych historycznych: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Wyjątek: {str(e)}"
+            }
 
     async def get_account_info(self) -> Dict[str, Any]:
         """
         Pobiera informacje o koncie.
 
         Returns:
-            Dict z informacjami o koncie
+            Dict zawierający status operacji i informacje o koncie
         """
-        account = mt5.account_info()
-        return {
-            "login": account.login,
-            "balance": account.balance,
-            "equity": account.equity,
-            "margin": account.margin,
-            "margin_free": account.margin_free,
-            "margin_level": account.margin_level,
-            "currency": account.currency
-        }
+        try:
+            account = mt5.account_info()
+            if account is None:
+                self.logger.error("❌ Nie udało się pobrać informacji o koncie")
+                return {
+                    "status": "error",
+                    "message": "Nie udało się pobrać informacji o koncie"
+                }
+
+            return {
+                "status": "success",
+                "data": {
+                    "login": account.login,
+                    "balance": account.balance,
+                    "equity": account.equity,
+                    "margin": account.margin,
+                    "margin_free": account.margin_free,
+                    "margin_level": account.margin_level,
+                    "currency": account.currency
+                }
+            }
+        except Exception as e:
+            self.logger.error(f"❌ Wyjątek podczas pobierania informacji o koncie: {str(e)}")
+            return {
+                "status": "error",
+                "message": f"Wyjątek: {str(e)}"
+            }
 
     async def get_positions(self) -> List[Dict[str, Any]]:
         """

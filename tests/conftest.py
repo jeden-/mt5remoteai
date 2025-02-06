@@ -12,7 +12,7 @@ from src.utils.config import ConfigLoader
 from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, MagicMock
 from pathlib import Path
 import sys
 from decimal import Decimal
@@ -23,6 +23,36 @@ from src.models.data_models import SignalData, SignalAction
 
 # Załaduj zmienne środowiskowe z pliku .env
 load_dotenv()
+
+
+class AsyncMockWrapper:
+    """Wrapper dla asynchronicznych mocków."""
+    
+    def __init__(self, mock_name: str):
+        self._mock = AsyncMock()
+        self._mock_name = mock_name
+        self._calls = []
+        
+    async def __call__(self, *args, **kwargs):
+        self._calls.append((args, kwargs))
+        return await self._mock(*args, **kwargs)
+        
+    @property
+    def call_count(self) -> int:
+        return len(self._calls)
+        
+    def assert_called_once(self):
+        assert len(self._calls) == 1, f"Expected {self._mock_name} to be called once. Called {len(self._calls)} times."
+        
+    def assert_called_with(self, *args, **kwargs):
+        assert (args, kwargs) in self._calls, f"Expected {self._mock_name} to be called with {args}, {kwargs}"
+        
+    def assert_not_called(self):
+        assert len(self._calls) == 0, f"Expected {self._mock_name} not to be called. Called {len(self._calls)} times."
+        
+    def reset_mock(self):
+        self._calls = []
+        self._mock.reset_mock()
 
 
 @pytest.fixture(scope="session")
@@ -220,31 +250,32 @@ def sample_market_data() -> dict:
     """
     return {
         'symbol': 'EURUSD',
-        'current_price': 1.1000,
-        'sma_20': 1.0990,
-        'sma_50': 1.0980,
-        'price_change_24h': 0.5,
-        'volume_24h': 10000,
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now(),
+        'open': 1.1000,
+        'high': 1.1050,
+        'low': 1.0950,
+        'close': 1.1025,
+        'volume': 1000.0
     }
 
 
 @pytest.fixture
 def sample_trade_info() -> dict:
     """
-    Fixture dostarczający przykładowe dane transakcji.
+    Fixture dostarczający przykładowe dane o transakcji.
     
     Returns:
-        dict: Słownik z danymi transakcji
+        dict: Słownik z danymi o transakcji
     """
     return {
         'symbol': 'EURUSD',
-        'type': 'BUY',
+        'order_type': 'BUY',
         'volume': 0.1,
         'price': 1.1000,
         'sl': 1.0950,
         'tp': 1.1100,
-        'timestamp': datetime.now().isoformat()
+        'open_time': datetime.now(),
+        'status': 'OPEN'
     }
 
 
@@ -257,18 +288,16 @@ def sample_ai_analysis() -> dict:
         dict: Słownik z analizą AI
     """
     return {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now().isoformat(),
-        'ollama_analysis': {
-            'trend': 'UP',
-            'strength': 8,
-            'recommendation': 'BUY'
-        },
-        'claude_analysis': {
-            'recommendation': 'LONG',
-            'confidence': 0.85,
-            'risk_level': 'MEDIUM'
-        }
+        'sentiment': 'BULLISH',
+        'confidence': 0.85,
+        'factors': [
+            'Strong upward trend',
+            'Positive market sentiment',
+            'Low volatility'
+        ],
+        'risk_level': 'MEDIUM',
+        'recommended_position_size': 0.1,
+        'timestamp': datetime.now()
     }
 
 
@@ -281,13 +310,12 @@ def sample_error_info() -> dict:
         dict: Słownik z informacjami o błędzie
     """
     return {
-        'type': 'CONNECTION_ERROR',
-        'message': 'Nie można połączyć z MT5',
-        'timestamp': datetime.now().isoformat(),
-        'details': {
-            'attempt': 3,
-            'last_error': 'Connection timeout'
-        }
+        'error_code': 1000,
+        'error_message': 'Connection error',
+        'timestamp': datetime.now(),
+        'severity': 'HIGH',
+        'component': 'MT5_CONNECTOR',
+        'details': 'Failed to connect to MT5 terminal'
     }
 
 
@@ -300,13 +328,14 @@ def sample_strategy_config() -> dict:
         dict: Słownik z konfiguracją strategii
     """
     return {
-        'max_position_size': 0.1,
-        'max_risk_per_trade': 0.02,
-        'allowed_symbols': ['EURUSD', 'GBPUSD', 'USDJPY'],
-        'timeframe': 'H1',
-        'indicators': {
-            'sma_periods': [20, 50],
-            'rsi_period': 14
+        'name': 'RSI_Strategy',
+        'timeframe': '1H',
+        'parameters': {
+            'rsi_period': 14,
+            'rsi_overbought': 70,
+            'rsi_oversold': 30,
+            'stop_loss_pips': 50,
+            'take_profit_pips': 100
         }
     }
 
@@ -320,126 +349,127 @@ def sample_account_info() -> dict:
         dict: Słownik z informacjami o koncie
     """
     return {
-        'balance': 10000,
-        'equity': 10000,
-        'margin': 0,
-        'margin_level': 0,
-        'profit': 0,
-        'currency': 'USD',
-        'leverage': 100
+        'balance': 10000.0,
+        'equity': 10100.0,
+        'margin': 100.0,
+        'free_margin': 9900.0,
+        'margin_level': 1010.0,
+        'leverage': 100,
+        'currency': 'USD'
     }
 
 
 @pytest_asyncio.fixture(scope="function")
 async def clean_test_db(test_db_handler):
-    """Fixture czyszczący bazę testową przed i po testach."""
+    """
+    Fixture czyszczący bazę danych przed każdym testem.
+    
+    Args:
+        test_db_handler: Handler bazy danych
+    """
     async with test_db_handler.pool.acquire() as conn:
-        await conn.execute("""
-            DROP TABLE IF EXISTS market_data CASCADE;
-            DROP TABLE IF EXISTS trades CASCADE;
-            DROP TABLE IF EXISTS historical_data CASCADE;
-        """)
-    await test_db_handler.create_tables()
+        await conn.execute("TRUNCATE market_data, trades, historical_data RESTART IDENTITY")
     yield
-    async with test_db_handler.pool.acquire() as conn:
-        await conn.execute("""
-            DROP TABLE IF EXISTS market_data CASCADE;
-            DROP TABLE IF EXISTS trades CASCADE;
-            DROP TABLE IF EXISTS historical_data CASCADE;
-        """)
 
 
 @pytest_asyncio.fixture
 async def sample_db_data(test_db_pool: asyncpg.Pool) -> AsyncGenerator[None, None]:
     """
-    Fixture wstawiający przykładowe dane do bazy testowej.
+    Fixture wstawiający przykładowe dane do bazy.
     
     Args:
-        test_db_pool: Pula połączeń do bazy testowej
+        test_db_pool: Pula połączeń do bazy danych
     """
     async with test_db_pool.acquire() as conn:
-        # Przykładowe dane rynkowe
+        # Wstaw przykładowe dane rynkowe
         await conn.execute("""
             INSERT INTO market_data (symbol, timestamp, open, high, low, close, volume)
-            VALUES 
-                ('EURUSD', NOW(), 1.1000, 1.1100, 1.0900, 1.1050, 1000),
-                ('GBPUSD', NOW(), 1.2500, 1.2600, 1.2400, 1.2550, 800);
-        """)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """, 'EURUSD', datetime.now(), 1.1000, 1.1050, 1.0950, 1.1025, 1000.0)
         
-        # Przykładowe transakcje
+        # Wstaw przykładową transakcję
         await conn.execute("""
             INSERT INTO trades (symbol, order_type, volume, price, sl, tp, open_time, status)
-            VALUES 
-                ('EURUSD', 'BUY', 0.1, 1.1000, 1.0950, 1.1100, NOW(), 'OPEN'),
-                ('GBPUSD', 'SELL', 0.1, 1.2550, 1.2600, 1.2450, NOW(), 'OPEN');
-        """)
-        
-        # Przykładowe dane historyczne
-        await conn.execute("""
-            INSERT INTO historical_data (symbol, timeframe, timestamp, open, high, low, close, volume)
-            VALUES 
-                ('EURUSD', '1H', NOW(), 1.1000, 1.1100, 1.0900, 1.1050, 1000),
-                ('GBPUSD', '1H', NOW(), 1.2500, 1.2600, 1.2400, 1.2550, 800);
-        """)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, 'EURUSD', 'BUY', 0.1, 1.1000, 1.0950, 1.1100, datetime.now(), 'OPEN')
     
-    yield 
+    yield
 
 
 @pytest.fixture
 def sample_data():
-    """Przykładowe dane historyczne dla testów."""
+    """Fixture dostarczający przykładowe dane do testów."""
     dates = pd.date_range(start='2024-01-01', periods=100, freq='1h')
     data = pd.DataFrame(index=dates)
-    data['open'] = np.random.uniform(100, 110, len(dates))
-    data['high'] = data['open'] + np.random.uniform(0, 2, len(dates))
-    data['low'] = data['open'] - np.random.uniform(0, 2, len(dates))
-    data['close'] = np.random.uniform(100, 110, len(dates))
-    data['volume'] = np.random.uniform(1000, 5000, len(dates))
     
-    # Dodaj wskaźniki techniczne
-    data['SMA_20'] = data['close'].rolling(window=20).mean()
-    data['SMA_50'] = data['close'].rolling(window=50).mean()
-    data['RSI'] = 50 + np.random.uniform(-20, 20, len(dates))
-    data['MACD'] = np.random.uniform(-2, 2, len(dates))
-    data['Signal_Line'] = np.random.uniform(-2, 2, len(dates))
-    data['BB_upper'] = data['SMA_20'] + 2 * data['close'].rolling(window=20).std()
-    data['BB_middle'] = data['SMA_20']
-    data['BB_lower'] = data['SMA_20'] - 2 * data['close'].rolling(window=20).std()
+    # Generuj losowe dane OHLCV
+    data['open'] = np.random.normal(1.1000, 0.0010, size=len(data))
+    data['high'] = data['open'] + abs(np.random.normal(0, 0.0005, size=len(data)))
+    data['low'] = data['open'] - abs(np.random.normal(0, 0.0005, size=len(data)))
+    data['close'] = np.random.normal(1.1000, 0.0010, size=len(data))
+    data['volume'] = np.random.normal(1000, 100, size=len(data))
     
     return data
 
 
 @pytest.fixture
 def small_sample_data():
-    """Przykładowe dane historyczne dla testów - mały zestaw."""
-    dates = pd.date_range(start='2024-01-01', periods=5, freq='1h')
+    """Fixture dostarczający mały zestaw danych do testów."""
+    dates = pd.date_range(start='2024-01-01', periods=10, freq='1h')
     data = pd.DataFrame(index=dates)
-    data['open'] = np.random.uniform(100, 110, len(dates))
-    data['high'] = data['open'] + np.random.uniform(0, 2, len(dates))
-    data['low'] = data['open'] - np.random.uniform(0, 2, len(dates))
-    data['close'] = np.random.uniform(100, 110, len(dates))
-    data['volume'] = np.random.uniform(1000, 5000, len(dates))
     
-    # Dodaj wskaźniki techniczne
-    data['SMA_20'] = data['close'].rolling(window=2).mean()
-    data['SMA_50'] = data['close'].rolling(window=2).mean()
-    data['RSI'] = 50 + np.random.uniform(-20, 20, len(dates))
-    data['MACD'] = np.random.uniform(-2, 2, len(dates))
-    data['Signal_Line'] = np.random.uniform(-2, 2, len(dates))
+    # Generuj deterministyczne dane OHLCV
+    data['open'] = [1.1000, 1.1010, 1.1020, 1.1015, 1.1025, 1.1035, 1.1030, 1.1040, 1.1045, 1.1050]
+    data['high'] = [1.1020, 1.1030, 1.1040, 1.1035, 1.1045, 1.1055, 1.1050, 1.1060, 1.1065, 1.1070]
+    data['low'] = [1.0990, 1.1000, 1.1010, 1.1005, 1.1015, 1.1025, 1.1020, 1.1030, 1.1035, 1.1040]
+    data['close'] = [1.1010, 1.1020, 1.1015, 1.1025, 1.1035, 1.1030, 1.1040, 1.1045, 1.1050, 1.1060]
+    data['volume'] = [1000, 1100, 900, 1200, 1000, 1300, 800, 1100, 1000, 1200]
     
     return data
 
 
-@pytest.fixture
-def mock_logger():
-    """Fixture tworzący mock dla loggera."""
-    logger = Mock()
-    logger.info = AsyncMock()
-    logger.error = AsyncMock()
-    logger.warning = AsyncMock()
-    logger.debug = AsyncMock()
-    logger.log_trade = AsyncMock()
-    logger.log_error = AsyncMock()
+@pytest_asyncio.fixture
+async def mock_logger():
+    """
+    Tworzy mock obiektu loggera do testów.
+    """
+    logger = AsyncMock(spec=TradingLogger)
+    
+    # Dodaj atrybuty do śledzenia wywołań
+    logger.info_calls = []
+    logger.error_calls = []
+    logger.warning_calls = []
+    logger.debug_calls = []
+    logger.log_trade_calls = []
+    logger.log_error_calls = []
+    
+    # Zdefiniuj zachowanie metod
+    async def info_side_effect(message):
+        logger.info_calls.append(message)
+        
+    async def error_side_effect(message):
+        logger.error_calls.append(message)
+        
+    async def warning_side_effect(message):
+        logger.warning_calls.append(message)
+        
+    async def debug_side_effect(message):
+        logger.debug_calls.append(message)
+        
+    async def log_trade_side_effect(data, action=None):
+        logger.log_trade_calls.append((data, action))
+        
+    async def log_error_side_effect(error):
+        logger.log_error_calls.append(error)
+    
+    # Przypisz side effects
+    logger.info.side_effect = info_side_effect
+    logger.error.side_effect = error_side_effect
+    logger.warning.side_effect = warning_side_effect
+    logger.debug.side_effect = debug_side_effect
+    logger.log_trade.side_effect = log_trade_side_effect
+    logger.log_error.side_effect = log_error_side_effect
+    
     return logger
 
 
@@ -518,33 +548,6 @@ def event_loop_policy():
     return asyncio.get_event_loop_policy()
 
 
-@pytest.fixture(scope="function")
-def event_loop():
-    """Fixture tworzący event loop dla testów asynchronicznych."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="function")
-async def position_manager_fixture(mock_logger):
-    """
-    Fixture dla PositionManager z własnym event loop.
-    """
-    from src.trading.position_manager import PositionManager
-    from decimal import Decimal
-    
-    manager = PositionManager(
-        symbol='EURUSD',
-        max_position_size=Decimal('1.0'),
-        stop_loss_pips=Decimal('50'),
-        take_profit_pips=Decimal('100'),
-        logger=mock_logger
-    )
-    yield manager
-
-
 @pytest.fixture
 def sample_signal():
     """Fixture tworzący przykładowy sygnał BUY."""
@@ -578,4 +581,21 @@ def sample_sell_signal():
         take_profit=Decimal('1.0900'),
         indicators={},
         ai_analysis={}
-    ) 
+    )
+
+
+@pytest_asyncio.fixture
+async def position_manager(mock_logger):
+    """Fixture zwracająca menedżera pozycji."""
+    from src.trading.position_manager import PositionManager
+    from decimal import Decimal
+    
+    manager = PositionManager(
+        symbol='EURUSD',
+        max_position_size=Decimal('1.0'),
+        stop_loss_pips=Decimal('50'),
+        take_profit_pips=Decimal('100'),
+        trailing_stop_pips=Decimal('30'),
+        logger=mock_logger
+    )
+    yield manager 

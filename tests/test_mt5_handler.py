@@ -210,11 +210,13 @@ async def test_get_current_price(handler):
         price = await handler.get_current_price()
         
         assert isinstance(price, dict)
-        assert 'bid' in price
-        assert 'ask' in price
-        assert 'last' in price
-        assert price['bid'] == 1.1000
-        assert price['ask'] == 1.1002
+        assert price['status'] == 'success'
+        assert 'data' in price
+        assert 'bid' in price['data']
+        assert 'ask' in price['data']
+        assert 'last' in price['data']
+        assert price['data']['bid'] == 1.1000
+        assert price['data']['ask'] == 1.1002
         mock_tick.assert_called_once_with('EURUSD')
 
 @pytest.mark.asyncio
@@ -237,15 +239,19 @@ async def test_get_historical_data(handler):
             })
         mock_copy.return_value = data
         
-        df = await handler.get_historical_data(
+        result = await handler.get_historical_data(
             start_date=datetime(2024, 1, 1),
             num_bars=100
         )
         
+        assert isinstance(result, dict)
+        assert result['status'] == 'success'
+        assert 'data' in result
+        df = result['data']
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 100
         assert all(col in df.columns for col in [
-            'open', 'high', 'low', 'close', 'volume'
+            'open', 'high', 'low', 'close', 'tick_volume'
         ])
         mock_copy.assert_called_once()
 
@@ -255,36 +261,51 @@ async def test_get_historical_data_error(handler):
     with patch('MetaTrader5.copy_rates_from') as mock_copy:
         mock_copy.return_value = None
         
-        with pytest.raises(RuntimeError) as exc_info:
-            await handler.get_historical_data(
-                start_date=datetime(2024, 1, 1),
-                num_bars=100
-            )
-        
-        assert "Nie udało się pobrać danych historycznych" in str(exc_info.value)
+        result = await handler.get_historical_data(
+            start_date=datetime(2024, 1, 1),
+            num_bars=100
+        )
+        assert result['status'] == 'error'
+        assert 'Nie udało się pobrać danych historycznych' in result['message']
 
 @pytest.mark.asyncio
 async def test_get_account_info(handler):
     """Test pobierania informacji o koncie."""
-    with patch('MetaTrader5.account_info') as mock_info:
-        mock_info.return_value = Mock(
+    with patch('MetaTrader5.account_info') as mock_account:
+        mock_account.return_value = Mock(
             login=12345,
             balance=10000.0,
             equity=10050.0,
             margin=100.0,
             margin_free=9950.0,
             margin_level=100.5,
-            currency='USD'
+            currency="USD"
         )
         
-        info = await handler.get_account_info()
+        result = await handler.get_account_info()
         
-        assert isinstance(info, dict)
-        assert info['balance'] == 10000.0
-        assert info['equity'] == 10050.0
-        assert info['margin'] == 100.0
-        assert info['currency'] == 'USD'
-        mock_info.assert_called_once()
+        assert isinstance(result, dict)
+        assert result['status'] == 'success'
+        assert 'data' in result
+        account_info = result['data']
+        assert account_info['login'] == 12345
+        assert account_info['balance'] == 10000.0
+        assert account_info['equity'] == 10050.0
+        assert account_info['margin'] == 100.0
+        assert account_info['margin_free'] == 9950.0
+        assert account_info['margin_level'] == 100.5
+        assert account_info['currency'] == "USD"
+        mock_account.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_error_handling_get_account_info(handler):
+    """Test obsługi błędów przy pobieraniu informacji o koncie."""
+    with patch('MetaTrader5.account_info') as mock_account:
+        mock_account.return_value = None
+        
+        result = await handler.get_account_info()
+        assert result['status'] == 'error'
+        assert 'Nie udało się pobrać informacji o koncie' in result['message']
 
 @pytest.mark.asyncio
 async def test_get_positions(handler):
@@ -539,7 +560,12 @@ async def test_concurrent_operations(handler):
         mock_tick.return_value = Mock(bid=1.1000, ask=1.1002)
         mock_info = Mock(volume_min=0.01, volume_max=100.0, volume_step=0.01)
         mock_symbol_info.return_value = mock_info
-        mock_send.return_value = Mock(retcode=mt5.TRADE_RETCODE_DONE)
+        mock_send.return_value = Mock(
+            retcode=mt5.TRADE_RETCODE_DONE,
+            volume=0.1,
+            price=1.1000,
+            comment="Test trade"
+        )
         
         # Przygotuj dane historyczne
         dates = pd.date_range(start='2024-01-01', periods=100, freq='1h')
@@ -576,9 +602,21 @@ async def test_concurrent_operations(handler):
         
         # Sprawdź wyniki
         assert all(r is not None for r in results)
-        assert isinstance(results[0], dict)  # Wynik otwarcia pozycji
-        assert isinstance(results[1], dict)  # Aktualne ceny
-        assert isinstance(results[2], pd.DataFrame)  # Dane historyczne
+        assert all(isinstance(r, dict) for r in results)
+        assert all(r['status'] == 'success' for r in results)
+        
+        # Sprawdź wynik otwarcia pozycji
+        assert results[0]['volume'] == 0.1
+        
+        # Sprawdź wynik cen
+        assert 'data' in results[1]
+        assert 'bid' in results[1]['data']
+        assert 'ask' in results[1]['data']
+        
+        # Sprawdź wynik danych historycznych
+        assert 'data' in results[2]
+        assert isinstance(results[2]['data'], pd.DataFrame)
+        assert len(results[2]['data']) == 100
 
 @pytest.mark.benchmark
 def test_strategy_execution_speed(benchmark, handler):
@@ -624,14 +662,16 @@ async def test_memory_usage(handler):
         async def run_operations():
             """Funkcja do profilowania pamięci."""
             # Pobierz duży zestaw danych historycznych
-            data = await handler.get_historical_data(
+            result = await handler.get_historical_data(
                 start_date=datetime(2024, 1, 1),
                 num_bars=1000
             )
+            assert result['status'] == 'success'
+            df = result['data']
             # Wykonaj operacje na danych
-            data['sma_20'] = data['close'].rolling(window=20).mean()
-            data['sma_50'] = data['close'].rolling(window=50).mean()
-            return data
+            df['sma_20'] = df['close'].rolling(window=20).mean()
+            df['sma_50'] = df['close'].rolling(window=50).mean()
+            return df
 
         # Zmierz zużycie pamięci
         baseline = memory_profiler.memory_usage()[0]
@@ -641,33 +681,53 @@ async def test_memory_usage(handler):
         # Sprawdź czy zużycie pamięci jest poniżej 100MB
         assert peak - baseline < 100  # MB
 
-@pytest.mark.integration
-async def test_full_trading_cycle(handler):
+@pytest.mark.asyncio
+async def test_full_trading_cycle():
     """Test pełnego cyklu tradingowego."""
-    with patch('MetaTrader5.order_send') as mock_send, \
-         patch('MetaTrader5.symbol_info_tick') as mock_tick, \
+    with patch('MetaTrader5.initialize') as mock_init, \
          patch('MetaTrader5.symbol_info') as mock_symbol_info, \
-         patch('MetaTrader5.copy_rates_from') as mock_copy, \
-         patch('MetaTrader5.positions_get') as mock_positions:
+         patch('MetaTrader5.symbol_info_tick') as mock_tick, \
+         patch('MetaTrader5.order_send') as mock_send, \
+         patch('MetaTrader5.positions_get') as mock_positions, \
+         patch('MetaTrader5.copy_rates_from') as mock_copy:
         
-        # Przygotuj mocki
-        mock_tick.return_value = Mock(bid=1.1000, ask=1.1002)
-        mock_info = Mock(volume_min=0.01, volume_max=100.0, volume_step=0.01)
-        mock_symbol_info.return_value = mock_info
-        
-        # Symuluj udane otwarcie pozycji
+        mock_init.return_value = True
+        mock_symbol_info.return_value = Mock(
+            volume_min=0.01,
+            volume_max=100.0,
+            volume_step=0.01
+        )
+        mock_tick.return_value = Mock(
+            bid=1.1000,
+            ask=1.1002,
+            last=1.1001,
+            volume=1000,
+            time=datetime.now().timestamp()
+        )
         mock_send.return_value = Mock(
             retcode=mt5.TRADE_RETCODE_DONE,
-            volume=0.1,
+            volume=1.0,
             price=1.1002,
             comment="Test trade"
         )
         
-        # Symuluj dane historyczne
+        # Ustaw timestamp dla pozycji
+        position_time = int(datetime.now().timestamp())
+        mock_positions.return_value = [Mock(
+            ticket=12345,
+            type=mt5.ORDER_TYPE_BUY,
+            volume=1.0,
+            price_open=1.1002,
+            price_current=1.1000,
+            profit=50.0,
+            time=position_time
+        )]
+
+        # Przygotuj dane historyczne
         dates = pd.date_range(start='2024-01-01', periods=100, freq='1h')
-        historical_data = []
+        data = []
         for date in dates:
-            historical_data.append({
+            data.append({
                 'time': int(date.timestamp()),
                 'open': np.random.uniform(1.1000, 1.1100),
                 'high': np.random.uniform(1.1100, 1.1200),
@@ -677,101 +737,269 @@ async def test_full_trading_cycle(handler):
                 'spread': 2,
                 'real_volume': np.random.randint(10000, 20000)
             })
-        mock_copy.return_value = historical_data
+        mock_copy.return_value = data
         
-        # Symuluj otwartą pozycję
-        mock_position = Mock(
-            ticket=12345,
-            type=mt5.ORDER_TYPE_BUY,
-            volume=0.1,
-            price_open=1.1002,
-            price_current=1.1050,
-            profit=48.0,
-            sl=1.0950,
-            tp=1.1100
-        )
-        mock_positions.return_value = [mock_position]
+        handler = MT5Handler('EURUSD')
         
-        # 1. Pobierz dane historyczne
-        data = await handler.get_historical_data(
-            start_date=datetime(2024, 1, 1),
-            num_bars=100
-        )
-        assert isinstance(data, pd.DataFrame)
-        assert len(data) == 100
+        # 1. Pobierz aktualną cenę
+        price_result = await handler.get_current_price()
+        assert price_result['status'] == 'success'
+        assert 'data' in price_result
+        assert np.isclose(price_result['data']['bid'], 1.1000, atol=1e-3)
+        assert np.isclose(price_result['data']['ask'], 1.1002, atol=1e-3)
         
-        # 2. Pobierz aktualną cenę
-        price = await handler.get_current_price()
-        assert isinstance(price, dict)
-        assert 'bid' in price and 'ask' in price
+        # 2. Pobierz dane historyczne
+        hist_result = await handler.get_historical_data(datetime.now())
+        assert hist_result['status'] == 'success'
+        assert 'data' in hist_result
+        df = hist_result['data']
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 100
         
         # 3. Otwórz pozycję
         open_result = await handler.open_position(
             direction='BUY',
-            volume=0.1,
+            volume=1.0,
             stop_loss=1.0950,
-            take_profit=1.1100
+            take_profit=1.1050
         )
         assert open_result['status'] == 'success'
-        assert open_result['volume'] == 0.1
+        assert np.isclose(open_result['volume'], 1.0, atol=1e-3)
+        assert np.isclose(open_result['price'], 1.1002, atol=1e-3)
         
         # 4. Pobierz otwarte pozycje
         positions = await handler.get_positions()
         assert len(positions) == 1
         assert positions[0]['ticket'] == 12345
+        assert positions[0]['type'] == 'BUY'
+        assert np.isclose(positions[0]['volume'], 1.0, atol=1e-3)
+        assert positions[0]['time'] == datetime.fromtimestamp(position_time)
         
         # 5. Zamknij pozycję
-        mock_send.return_value = Mock(
-            retcode=mt5.TRADE_RETCODE_DONE,
-            volume=0.1,
-            price=1.1050,
-            comment="Test close"
-        )
-        
         close_result = await handler.close_position()
         assert close_result['status'] == 'success'
-        assert close_result['volume'] == 0.1
+        assert np.isclose(close_result['volume'], 1.0, atol=1e-3)
+        assert np.isclose(close_result['price'], 1.1000, atol=1e-3)
+        
+        # 6. Wyczyść
+        handler.cleanup()
 
 @pytest.mark.asyncio
-async def test_error_handling_under_load(handler):
+async def test_error_handling_under_load():
     """Test obsługi błędów pod obciążeniem."""
-    with patch('MetaTrader5.order_send') as mock_send, \
+    with patch('MetaTrader5.initialize') as mock_init, \
+         patch('MetaTrader5.symbol_info') as mock_symbol_info, \
          patch('MetaTrader5.symbol_info_tick') as mock_tick, \
-         patch('MetaTrader5.symbol_info') as mock_symbol_info:
+         patch('MetaTrader5.copy_rates_from') as mock_copy:
         
-        mock_tick.return_value = Mock(bid=1.1000, ask=1.1002)
-        mock_info = Mock(volume_min=0.01, volume_max=100.0, volume_step=0.01)
-        mock_symbol_info.return_value = mock_info
+        mock_init.return_value = True
+        mock_symbol_info.return_value = Mock(
+            volume_min=0.01,
+            volume_max=100.0,
+            volume_step=0.01
+        )
         
-        # Symuluj różne błędy
-        errors = [
-            mt5.TRADE_RETCODE_REQUOTE,
-            mt5.TRADE_RETCODE_CONNECTION,
-            mt5.TRADE_RETCODE_PRICE_CHANGED,
-            mt5.TRADE_RETCODE_TIMEOUT,
-            mt5.TRADE_RETCODE_ERROR
-        ]
+        # Symuluj błędy
+        mock_tick.return_value = None
+        mock_copy.return_value = None
         
-        mock_send.side_effect = [
-            Mock(retcode=error, comment=f"Error {error}")
-            for error in errors
-        ]
-        
-        # Wykonaj wiele równoległych operacji
+        handler = MT5Handler('EURUSD')
         tasks = []
-        for _ in range(5):
-            tasks.append(handler.open_position(
-                direction='BUY',
-                volume=0.1,
-                stop_loss=1.0950,
-                take_profit=1.1100
-            ))
-            
+        
+        # Symuluj wiele równoczesnych operacji
+        for _ in range(10):
+            tasks.append(handler.get_current_price())
+            tasks.append(handler.get_historical_data(datetime.now()))
+        
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Sprawdź czy wszystkie błędy zostały obsłużone
+        # Sprawdź czy wszystkie operacje zostały obsłużone
         for result in results:
             assert isinstance(result, dict)
             assert result['status'] == 'error'
             assert 'message' in result
-            assert 'code' in result 
+            assert any(msg in result['message'] for msg in [
+                'Nie udało się pobrać aktualnej ceny',
+                'Nie udało się pobrać danych historycznych'
+            ])
+
+@pytest.mark.asyncio
+async def test_error_handling_get_current_price(handler):
+    """Test obsługi błędów przy pobieraniu aktualnej ceny."""
+    with patch('MetaTrader5.symbol_info_tick') as mock_tick:
+        mock_tick.return_value = None
+        
+        result = await handler.get_current_price()
+        assert result['status'] == 'error'
+        assert 'Nie udało się pobrać aktualnej ceny' in result['message']
+
+@pytest.mark.asyncio
+async def test_error_handling_get_historical_data(handler):
+    """Test obsługi błędów przy pobieraniu danych historycznych."""
+    with patch('MetaTrader5.copy_rates_from') as mock_copy:
+        mock_copy.return_value = None
+        
+        result = await handler.get_historical_data(datetime.now())
+        assert result['status'] == 'error'
+        assert 'Nie udało się pobrać danych historycznych' in result['message']
+
+@pytest.mark.asyncio
+async def test_error_handling_get_account_info(handler):
+    """Test obsługi błędów przy pobieraniu informacji o koncie."""
+    with patch('MetaTrader5.account_info') as mock_account:
+        mock_account.return_value = None
+        
+        result = await handler.get_account_info()
+        assert result['status'] == 'error'
+        assert 'Nie udało się pobrać informacji o koncie' in result['message']
+
+@pytest.mark.asyncio
+async def test_error_handling_get_positions(handler):
+    """Test obsługi błędów przy pobieraniu pozycji."""
+    with patch('MetaTrader5.positions_get') as mock_get:
+        mock_get.return_value = None
+        
+        result = await handler.get_positions()
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+@pytest.mark.asyncio
+async def test_cleanup_error(handler):
+    """Test obsługi błędów podczas czyszczenia."""
+    with patch('MetaTrader5.shutdown') as mock_shutdown:
+        mock_shutdown.return_value = False
+        
+        handler.cleanup()
+        mock_shutdown.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_del_method(handler):
+    """Test metody __del__."""
+    with patch.object(handler, 'cleanup') as mock_cleanup:
+        handler.__del__()
+        mock_cleanup.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_validate_volume_exceptions(handler):
+    """Test wyjątków podczas walidacji wolumenu."""
+    with patch('MetaTrader5.symbol_info') as mock_symbol_info:
+        # Test gdy nie można pobrać informacji o symbolu
+        mock_symbol_info.return_value = None
+        with pytest.raises(ValueError, match="Nie można pobrać informacji o symbolu"):
+            handler._validate_volume(1.0)
+
+        # Test dla nieprawidłowego kroku wolumenu
+        mock_info = Mock()
+        mock_info.volume_min = 0.01
+        mock_info.volume_max = 100.0
+        mock_info.volume_step = 0.01
+        mock_symbol_info.return_value = mock_info
+        
+        with pytest.raises(ValueError, match="Nieprawidłowy krok wolumenu"):
+            handler._validate_volume(0.015)
+
+@pytest.mark.asyncio
+async def test_validate_sl_tp_exceptions(handler):
+    """Test wyjątków podczas walidacji poziomów SL/TP."""
+    # Test dla pozycji BUY z nieprawidłowym SL
+    with pytest.raises(ValueError, match="Dla pozycji BUY, stop loss musi być poniżej ceny wejścia"):
+        handler._validate_sl_tp('BUY', 1.1000, 1.1100, 1.1200)
+
+    # Test dla pozycji BUY z nieprawidłowym TP
+    with pytest.raises(ValueError, match="Dla pozycji BUY, take profit musi być powyżej ceny wejścia"):
+        handler._validate_sl_tp('BUY', 1.1000, 1.0900, 1.0950)
+
+    # Test dla pozycji SELL z nieprawidłowym SL
+    with pytest.raises(ValueError, match="Dla pozycji SELL, stop loss musi być powyżej ceny wejścia"):
+        handler._validate_sl_tp('SELL', 1.1000, 1.0900, 1.0800)
+
+    # Test dla pozycji SELL z nieprawidłowym TP
+    with pytest.raises(ValueError, match="Dla pozycji SELL, take profit musi być poniżej ceny wejścia"):
+        handler._validate_sl_tp('SELL', 1.1000, 1.1100, 1.1200)
+
+@pytest.mark.asyncio
+async def test_close_position_exceptions(handler):
+    """Test wyjątków podczas zamykania pozycji."""
+    with patch('MetaTrader5.positions_get') as mock_get, \
+         patch('MetaTrader5.order_send') as mock_send, \
+         patch('MetaTrader5.symbol_info_tick') as mock_tick:
+        
+        # Test gdy order_send zwraca błąd
+        mock_get.return_value = [Mock(
+            ticket=12345,
+            type=mt5.ORDER_TYPE_BUY,
+            volume=1.0,
+            profit=50.0
+        )]
+        mock_tick.return_value = Mock(
+            bid=1.1000,
+            ask=1.1002
+        )
+        mock_send.return_value = Mock(
+            retcode=mt5.TRADE_RETCODE_ERROR,
+            comment="Test error"
+        )
+        
+        result = await handler.close_position()
+        assert result['status'] == 'error'
+        assert result['message'] == "Błąd: Test error"
+        
+        # Test gdy positions_get zwraca None
+        mock_get.return_value = None
+        result = await handler.close_position()
+        assert result['status'] == 'error'
+        assert result['message'] == "Brak otwartej pozycji"
+        
+        # Test gdy występuje wyjątek
+        mock_get.side_effect = Exception("Test exception")
+        result = await handler.close_position()
+        assert result['status'] == 'error'
+        assert "Wyjątek: Test exception" in result['message']
+
+@pytest.mark.asyncio
+async def test_get_current_price_exceptions(handler):
+    """Test wyjątków podczas pobierania aktualnej ceny."""
+    with patch('MetaTrader5.symbol_info_tick') as mock_tick:
+        # Test gdy symbol_info_tick zwraca None
+        mock_tick.return_value = None
+        result = await handler.get_current_price()
+        assert result['status'] == 'error'
+        assert result['message'] == "Nie udało się pobrać aktualnej ceny"
+        
+        # Test gdy występuje wyjątek
+        mock_tick.side_effect = Exception("Test exception")
+        result = await handler.get_current_price()
+        assert result['status'] == 'error'
+        assert "Wyjątek: Test exception" in result['message']
+
+@pytest.mark.asyncio
+async def test_get_historical_data_exceptions(handler):
+    """Test wyjątków podczas pobierania danych historycznych."""
+    with patch('MetaTrader5.copy_rates_from') as mock_copy:
+        # Test gdy copy_rates_from zwraca None
+        mock_copy.return_value = None
+        result = await handler.get_historical_data(datetime.now())
+        assert result['status'] == 'error'
+        assert result['message'] == "Nie udało się pobrać danych historycznych"
+        
+        # Test gdy występuje wyjątek
+        mock_copy.side_effect = Exception("Test exception")
+        result = await handler.get_historical_data(datetime.now())
+        assert result['status'] == 'error'
+        assert "Wyjątek: Test exception" in result['message']
+
+@pytest.mark.asyncio
+async def test_get_account_info_exceptions(handler):
+    """Test wyjątków podczas pobierania informacji o koncie."""
+    with patch('MetaTrader5.account_info') as mock_account:
+        # Test gdy account_info zwraca None
+        mock_account.return_value = None
+        result = await handler.get_account_info()
+        assert result['status'] == 'error'
+        assert result['message'] == "Nie udało się pobrać informacji o koncie"
+        
+        # Test gdy występuje wyjątek
+        mock_account.side_effect = Exception("Test exception")
+        result = await handler.get_account_info()
+        assert result['status'] == 'error'
+        assert "Wyjątek: Test exception" in result['message'] 

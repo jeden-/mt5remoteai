@@ -9,8 +9,8 @@ from pydantic_core import PydanticCustomError
 
 class DecimalPositiveError(ValueError):
     """Błąd ujemnej wartości dziesiętnej."""
-    def __init__(self):
-        super().__init__('Wartość musi być dodatnia')
+    def __init__(self, message: str = 'Wartość musi być dodatnia'):
+        super().__init__(message)
 
 
 class DecimalRangeError(ValueError):
@@ -62,8 +62,10 @@ def validate_decimal_positive(value: Decimal) -> Decimal:
     Raises:
         DecimalPositiveError: Gdy wartość nie jest dodatnia
     """
+    if value is None:
+        return value
     if value <= 0:
-        raise DecimalPositiveError()
+        raise DecimalPositiveError("Wartość musi być dodatnia")
     return value
 
 

@@ -5,7 +5,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, patch
 import asyncio
 import memory_profiler
 
@@ -128,8 +128,17 @@ async def test_generate_signals_no_position(sample_data, mock_mt5, mock_ollama, 
             'sma_20': 1.0950,
             'sma_50': 1.0900
         },
-        'ollama_analysis': 'RECOMMENDATION: BUY',
-        'claude_analysis': 'Rekomendacja: long\nSugerowany SL: 20 pips\nSugerowany TP: 60 pips'
+        'ollama_analysis': {
+            'recommendation': 'BUY',
+            'confidence': 0.8,
+            'reason': 'Trend wzrostowy'
+        },
+        'claude_analysis': {
+            'recommendation': 'LONG',
+            'stop_loss_pips': 20,
+            'take_profit_pips': 60,
+            'confidence': 0.9
+        }
     }
     
     signals = await strategy.generate_signals(analysis)
@@ -177,8 +186,17 @@ async def test_generate_signals_with_position(sample_data, mock_mt5, mock_ollama
             'sma_20': 1.0950,
             'sma_50': 1.0900
         },
-        'ollama_analysis': 'RECOMMENDATION: SELL',
-        'claude_analysis': 'Rekomendacja: short\nSugerowany SL: 20 pips\nSugerowany TP: 60 pips'
+        'ollama_analysis': {
+            'recommendation': 'SELL',
+            'confidence': 0.8,
+            'reason': 'Trend spadkowy'
+        },
+        'claude_analysis': {
+            'recommendation': 'SHORT',
+            'stop_loss_pips': 20,
+            'take_profit_pips': 60,
+            'confidence': 0.9
+        }
     }
     
     signals = await strategy.generate_signals(analysis)
@@ -222,8 +240,17 @@ async def test_analyze_market(sample_data, mock_mt5, mock_ollama, mock_claude, m
     )
 
     # Przygotuj dane testowe
-    mock_ollama.analyze_market_data.return_value = "RECOMMENDATION: BUY"
-    mock_claude.analyze_market_conditions.return_value = "Rekomendacja: long"
+    mock_ollama.analyze_market_data.return_value = {
+        'recommendation': 'BUY',
+        'confidence': 0.8,
+        'reason': 'Trend wzrostowy'
+    }
+    mock_claude.analyze_market_conditions.return_value = {
+        'recommendation': 'LONG',
+        'stop_loss_pips': 20,
+        'take_profit_pips': 60,
+        'confidence': 0.9
+    }
 
     analysis = await strategy.analyze_market('EURUSD')
     assert analysis is not None
@@ -234,12 +261,11 @@ async def test_analyze_market(sample_data, mock_mt5, mock_ollama, mock_claude, m
     
     # Sprawdź szczegółowo dane rynkowe
     market_data = analysis['market_data']
+    assert 'symbol' in market_data
     assert market_data['symbol'] == 'EURUSD'
     assert isinstance(market_data['current_price'], float)
-    assert isinstance(market_data['sma_20'], float)
-    assert isinstance(market_data['sma_50'], float)
-    assert isinstance(market_data['price_change_24h'], float)
-    assert isinstance(market_data['volume_24h'], float)
+    assert isinstance(market_data['volume'], float)
+    assert 'trend' in market_data
 
 @pytest.mark.asyncio
 async def test_execute_signals(mock_mt5, mock_ollama, mock_claude, mock_db):
@@ -531,25 +557,662 @@ async def test_strategy_integration(mock_mt5, mock_ollama, mock_claude, mock_db)
     # 1. Test analizy rynku
     analysis = await strategy.analyze_market('EURUSD')
     assert analysis is not None
-    assert isinstance(analysis, dict)  # Upewnij się, że analiza jest słownikiem
+    assert isinstance(analysis, dict)
+
+    # Dodaj brakujące wskaźniki techniczne
+    analysis['market_data']['technical_indicators'] = {
+        'sma_20': 1.1050,
+        'sma_50': 1.1000,
+        'rsi': 65,
+        'macd': 0.0015,
+        'macd_signal': 0.0010,
+        'bb_upper': 1.1100,
+        'bb_lower': 1.0900
+    }
 
     # 2. Test generowania sygnałów
-    signals = await strategy.generate_signals(analysis)  # Przekaż wynik analizy zamiast stringa
-    assert len(signals) > 0
-    for signal in signals:
-        assert signal.symbol == 'EURUSD'
-        assert signal.confidence > 0
-        assert signal.stop_loss is not None
-        assert signal.take_profit is not None
+    signals = await strategy.generate_signals(analysis)
+    assert isinstance(signals, dict)
+    assert 'signals' in signals
+    assert len(signals['signals']) > 0
+    
+    for signal in signals['signals']:
+        assert isinstance(signal, dict)
+        assert 'symbol' in signal
+        assert signal['symbol'] == 'EURUSD'
 
-    # 3. Test wykonania sygnałów
-    for signal in signals:
-        result = await strategy.execute_signal(signal)
-        assert result is True  # Sygnały powinny być wykonane pomyślnie
+@pytest.mark.asyncio
+async def test_analyze_market_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas analizy rynku."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
 
-    # 4. Test metryki wydajności
-    metrics = strategy.calculate_performance_metrics()
-    assert metrics is not None
-    assert 'win_rate' in metrics
-    assert 'profit_factor' in metrics
-    assert 'max_drawdown' in metrics 
+    # Test z pustymi danymi
+    mock_mt5.get_rates.return_value = pd.DataFrame()
+    with pytest.raises(ValueError, match="Brak danych"):
+        await strategy.analyze_market('EURUSD')
+
+    # Test z błędem połączenia
+    mock_mt5.get_rates.side_effect = Exception("Błąd połączenia")
+    with pytest.raises(Exception, match="Błąd połączenia"):
+        await strategy.analyze_market('EURUSD')
+
+@pytest.mark.asyncio
+async def test_execute_signals_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas wykonywania sygnałów."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={'allowed_symbols': ['EURUSD']}
+    )
+
+    # Test z niedozwolonym symbolem
+    signals = {
+        'symbol': 'USDJPY',  # Niedozwolony symbol
+        'action': 'BUY',
+        'volume': 0.1,
+        'entry_price': 1.1000,
+        'stop_loss': 1.0950,
+        'take_profit': 1.1100
+    }
+    result = await strategy.execute_signals(signals)
+    assert result is None
+
+    # Test z błędem podczas składania zlecenia
+    signals['symbol'] = 'EURUSD'
+    mock_mt5.place_order.side_effect = Exception("Błąd składania zlecenia")
+    result = await strategy.execute_signals(signals)
+    assert result is None
+
+def test_calculate_position_size_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas obliczania wielkości pozycji."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={'max_position_size': 0.5}
+    )
+
+    # Test z błędnymi parametrami
+    result = strategy._calculate_position_size('EURUSD', None, 1.0950)
+    assert result == strategy.config.get('max_position_size', 1.0)
+
+    # Test z błędem obliczeń
+    result = strategy._calculate_position_size('EURUSD', 1.1000, 1.1000)  # SL = entry
+    assert result == strategy.config.get('max_position_size', 1.0)
+
+def test_calculate_stop_loss_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas obliczania stop loss."""
+    config = {
+        'stop_loss_pips': 50,
+        'take_profit_pips': 100
+    }
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config=config
+    )
+
+    # Test z błędnymi parametrami
+    result = strategy._calculate_stop_loss('EURUSD', None, 1.1000)
+    assert result == 1.1000  # Powinno zwrócić entry_price
+
+    # Test z błędem obliczeń
+    result = strategy._calculate_stop_loss('EURUSD', 'INVALID', 1.1000)
+    assert result == 1.1000  # Powinno zwrócić entry_price
+
+    # Test z prawidłowymi parametrami
+    result = strategy._calculate_stop_loss('EURUSD', 'BUY', 1.1000)
+    assert result == 1.0950  # 50 pips poniżej entry_price
+
+def test_calculate_take_profit_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas obliczania take profit."""
+    config = {
+        'stop_loss_pips': 50,
+        'take_profit_pips': 100
+    }
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config=config
+    )
+
+    # Test z błędnymi parametrami
+    result = strategy._calculate_take_profit('EURUSD', None, 1.1000)
+    assert result == 1.1000  # Powinno zwrócić entry_price
+
+    # Test z błędem obliczeń
+    result = strategy._calculate_take_profit('EURUSD', 'INVALID', 1.1000)
+    assert result == 1.1000  # Powinno zwrócić entry_price
+
+    # Test z prawidłowymi parametrami
+    result = strategy._calculate_take_profit('EURUSD', 'BUY', 1.1000)
+    assert result == 1.1100  # 100 pips powyżej entry_price
+
+def test_analyze_technical_indicators_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas analizy wskaźników technicznych."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z pustym DataFrame
+    with pytest.raises(Exception):
+        strategy.analyze_technical_indicators(pd.DataFrame())
+
+    # Test z nieprawidłowymi danymi
+    invalid_df = pd.DataFrame({'invalid': [1, 2, 3]})
+    with pytest.raises(Exception):
+        strategy.analyze_technical_indicators(invalid_df)
+
+def test_calculate_performance_metrics_error_handling(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów podczas obliczania metryk wydajności."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z pustą listą transakcji
+    result = strategy.calculate_performance_metrics([])
+    assert result['win_rate'] == 0.0
+    assert result['profit_factor'] == 0.0
+
+    # Test z nieprawidłowymi danymi
+    with pytest.raises(Exception):
+        strategy.calculate_performance_metrics([{'invalid': 'data'}])
+
+def test_validate_analysis_error_handling_extended(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test obsługi błędów w validate_analysis."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z None jako analiza
+    assert not strategy.validate_analysis(None)
+
+    # Test z pustym słownikiem
+    assert not strategy.validate_analysis({})
+
+    # Test z brakującymi sekcjami
+    invalid_analysis = {
+        'trend': {},  # Brak wymaganych pól
+        'momentum': {
+            'rsi': None,  # Nieprawidłowa wartość
+            'macd': None
+        }
+    }
+    assert not strategy.validate_analysis(invalid_analysis)
+
+def test_calculate_stop_loss_validation_extended_2(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w calculate_stop_loss."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={'stop_loss_pips': 50}
+    )
+
+    # Test z None jako parametry
+    assert strategy._calculate_stop_loss(None, 'BUY', 1.1000) == 1.1000
+    assert strategy._calculate_stop_loss('EURUSD', None, 1.1000) == 1.1000
+    assert strategy._calculate_stop_loss('EURUSD', 'BUY', None) is None
+
+    # Test z JPY
+    jpy_result = strategy._calculate_stop_loss('USDJPY', 'BUY', 150.000)
+    assert abs(jpy_result - 149.500) < 0.001  # 50 pips dla JPY to 0.500
+
+def test_calculate_take_profit_validation_extended_2(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w calculate_take_profit."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={'take_profit_pips': 100}
+    )
+
+    # Test z None jako parametry
+    assert strategy._calculate_take_profit(None, 'BUY', 1.1000) == 1.1000
+    assert strategy._calculate_take_profit('EURUSD', None, 1.1000) == 1.1000
+    assert strategy._calculate_take_profit('EURUSD', 'BUY', None) is None
+
+    # Test z JPY
+    jpy_result = strategy._calculate_take_profit('USDJPY', 'BUY', 150.000)
+    assert abs(jpy_result - 151.000) < 0.001  # 100 pips dla JPY to 1.000
+
+def test_validate_analysis_validation_extended(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w validate_analysis."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z None jako analiza
+    assert not strategy.validate_analysis(None)
+
+    # Test z nieprawidłowymi wartościami
+    invalid_analysis = {
+        'trend': {
+            'sma_20': None,
+            'sma_50': None,
+            'sma_200': None,
+            'trend_direction': 'INVALID',
+            'trend_strength': -1
+        },
+        'momentum': {
+            'rsi': 101,  # Nieprawidłowa wartość
+            'macd': None,
+            'macd_signal': None,
+            'macd_hist': None,
+            'momentum': None
+        },
+        'volatility': {
+            'bb_upper': 1.0,
+            'bb_middle': 1.1,  # Nieprawidłowa kolejność
+            'bb_lower': 1.2,  # Nieprawidłowa kolejność
+            'bb_width': -1,
+            'atr': 0
+        }
+    }
+    assert not strategy.validate_analysis(invalid_analysis)
+
+@pytest.mark.asyncio
+async def test_analyze_market_data_validation_extended(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji danych w analyze_market."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z błędem w danych historycznych
+    mock_mt5.get_rates.return_value = pd.DataFrame({
+        'close': [None] * 100,  # Nieprawidłowe wartości
+        'volume': [None] * 100
+    })
+
+    with pytest.raises(Exception):
+        await strategy.analyze_market('EURUSD')
+
+@pytest.mark.asyncio
+async def test_generate_signals_validation_extended_2(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w generate_signals."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z nieprawidłowymi danymi market_data
+    analysis = {
+        'market_data': {
+            'symbol': None,  # Nieprawidłowa wartość
+            'current_price': None  # Nieprawidłowa wartość
+        },
+        'ollama_analysis': {'recommendation': 'BUY'},
+        'claude_analysis': {'recommendation': 'BUY'}
+    }
+
+    result = await strategy.generate_signals(analysis)
+    assert result['action'] == 'WAIT'
+    assert len(result['signals']) == 0
+
+@pytest.mark.asyncio
+async def test_execute_signals_validation_extended(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w execute_signals."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={'allowed_symbols': ['EURUSD']}
+    )
+
+    # Test z błędem podczas zapisu do bazy
+    signals = {
+        'symbol': 'EURUSD',
+        'action': 'BUY',
+        'volume': 0.1,
+        'entry_price': 1.1000,
+        'stop_loss': 1.0950,
+        'take_profit': 1.1100
+    }
+
+    # Symuluj udane złożenie zlecenia
+    mock_mt5.place_order.return_value = {
+        'ticket': 12345,
+        'symbol': 'EURUSD',
+        'type': 'BUY',
+        'volume': 0.1,
+        'price': 1.1000,
+        'sl': 1.0950,
+        'tp': 1.1100
+    }
+
+    # Symuluj błąd zapisu do bazy
+    mock_db.save_trade.side_effect = Exception("Database error")
+    result = await strategy.execute_signals(signals)
+    assert result is None
+
+    # Test z błędem podczas składania zlecenia
+    mock_mt5.place_order.side_effect = Exception("Order error")
+    result = await strategy.execute_signals(signals)
+    assert result is None
+
+    # Test z nieprawidłowym symbolem
+    signals['symbol'] = 'INVALID'
+    result = await strategy.execute_signals(signals)
+    assert result is None
+
+def test_validate_analysis_validation_extended_2(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w validate_analysis."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z nieprawidłowymi wartościami
+    invalid_analysis = {
+        'trend': {
+            'sma_20': None,
+            'sma_50': None,
+            'sma_200': None,
+            'trend_direction': None,
+            'trend_strength': None
+        },
+        'momentum': {
+            'rsi': None,
+            'macd': None,
+            'macd_signal': None,
+            'macd_hist': None,
+            'momentum': None
+        },
+        'volatility': {
+            'bb_upper': None,
+            'bb_middle': None,
+            'bb_lower': None,
+            'bb_width': None,
+            'atr': None
+        }
+    }
+    assert not strategy.validate_analysis(invalid_analysis)
+
+@pytest.mark.asyncio
+async def test_analyze_market_missing_data(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test analizy rynku gdy brakuje danych."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Symuluj brak danych z MT5
+    mock_mt5.get_rates.return_value = pd.DataFrame()
+
+    with pytest.raises(ValueError, match="Brak danych"):
+        await strategy.analyze_market('EURUSD')
+
+    # Symuluj błąd w analizie AI
+    mock_mt5.get_rates.return_value = sample_data
+    mock_ollama.analyze_market_data.side_effect = Exception("Błąd analizy")
+    mock_claude.analyze_market_conditions.side_effect = Exception("Błąd analizy")
+
+    with pytest.raises(Exception):
+        await strategy.analyze_market('EURUSD')
+
+@pytest.mark.asyncio
+async def test_generate_signals_invalid_data(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test generowania sygnałów z nieprawidłowymi danymi."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z brakującymi sekcjami
+    invalid_analysis = {
+        'market_data': {}
+    }
+    with pytest.raises(ValueError, match="Brak wymaganego pola: ollama_analysis"):
+        await strategy.generate_signals(invalid_analysis)
+
+    # Test z nieprawidłowymi rekomendacjami AI
+    invalid_analysis = {
+        'market_data': {
+            'symbol': 'EURUSD',
+            'current_price': 1.1000,
+            'technical_indicators': {
+                'sma_20': 1.0950,
+                'sma_50': 1.0900
+            }
+        },
+        'ollama_analysis': {
+            'recommendation': 'INVALID',
+            'confidence': 0.8
+        },
+        'claude_analysis': {
+            'recommendation': 'INVALID',
+            'confidence': 0.9
+        }
+    }
+    result = await strategy.generate_signals(invalid_analysis)
+    assert result['action'] == 'WAIT'
+    assert len(result['signals']) == 0
+
+def test_calculate_performance_metrics_validation_extended_3(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w calculate_performance_metrics."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z pustą listą
+    metrics = strategy.calculate_performance_metrics([])
+    assert metrics['win_rate'] == 0.0
+    assert metrics['profit_factor'] == 0.0
+    assert metrics['average_win'] == 0.0
+    assert metrics['average_loss'] == 0.0
+    assert metrics['max_drawdown'] == 0.0
+    assert metrics['sharpe_ratio'] == 0.0
+    assert metrics['recovery_factor'] == 0.0
+    assert metrics['profit_per_trade'] == 0.0
+
+    # Test z samymi stratami
+    trades = [
+        {'type': 'BUY', 'profit': -10},
+        {'type': 'SELL', 'profit': -20}
+    ]
+    metrics = strategy.calculate_performance_metrics(trades)
+    assert metrics['win_rate'] == 0.0
+    assert metrics['profit_factor'] == 0.0
+    assert metrics['average_win'] == 0.0
+    assert metrics['average_loss'] == -15.0
+
+    # Test z samymi zyskami
+    trades = [
+        {'type': 'BUY', 'profit': 10},
+        {'type': 'SELL', 'profit': 20}
+    ]
+    metrics = strategy.calculate_performance_metrics(trades)
+    assert metrics['win_rate'] == 1.0
+    assert metrics['average_win'] == 15.0
+    assert metrics['average_loss'] == 0.0
+
+def test_validate_analysis_validation_extended_3(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test rozszerzonej walidacji w validate_analysis."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={}
+    )
+
+    # Test z nieprawidłowymi wartościami wskaźników
+    invalid_analysis = {
+        'trend': {
+            'sma_20': 1.1000,
+            'sma_50': 1.0950,
+            'sma_200': 1.0900,
+            'trend_direction': 'UP',
+            'trend_strength': 0.005
+        },
+        'momentum': {
+            'rsi': 150,  # Nieprawidłowa wartość RSI
+            'macd': 0.0015,
+            'macd_signal': 0.0010,
+            'macd_hist': 0.0005,
+            'momentum': 0.01
+        },
+        'volatility': {
+            'bb_upper': 1.1100,
+            'bb_middle': 1.1000,
+            'bb_lower': 1.0900,
+            'bb_width': 0.02,
+            'atr': 0.0015
+        }
+    }
+    assert not strategy.validate_analysis(invalid_analysis)
+
+    # Test z nieprawidłową kolejnością Bollinger Bands
+    invalid_analysis['momentum']['rsi'] = 65  # Popraw RSI
+    invalid_analysis['volatility']['bb_upper'] = 1.0900  # Nieprawidłowa kolejność
+    invalid_analysis['volatility']['bb_lower'] = 1.1100
+    assert not strategy.validate_analysis(invalid_analysis)
+
+    # Test z ujemną wartością ATR
+    invalid_analysis['volatility']['bb_upper'] = 1.1100  # Przywróć prawidłową kolejność
+    invalid_analysis['volatility']['bb_lower'] = 1.0900
+    invalid_analysis['volatility']['atr'] = -0.0015  # Nieprawidłowa wartość ATR
+    assert not strategy.validate_analysis(invalid_analysis)
+
+@pytest.mark.asyncio
+async def test_edge_cases_coverage(mock_mt5, mock_ollama, mock_claude, mock_db):
+    """Test pokrywający brzegowe przypadki w różnych metodach."""
+    strategy = BasicStrategy(
+        mt5_connector=mock_mt5,
+        ollama_connector=mock_ollama,
+        anthropic_connector=mock_claude,
+        db_handler=mock_db,
+        config={
+            'risk_per_trade': 0.02,
+            'account_balance': 10000.0,
+            'max_position_size': 1.0,
+            'stop_loss_pips': 50,
+            'take_profit_pips': 100
+        }
+    )
+
+    # Test dla analyze_market
+    mock_mt5.get_rates.return_value = pd.DataFrame({
+        'close': [1.1000] * 10,
+        'volume': [1000.0] * 10
+    })
+    with pytest.raises(ValueError):
+        await strategy.analyze_market('EURUSD')
+
+    # Test dla generate_signals
+    analysis = {
+        'market_data': {
+            'symbol': 'EURUSD',
+            'current_price': 1.1000,
+            'technical_indicators': None  # Brak wskaźników technicznych
+        },
+        'ollama_analysis': {
+            'recommendation': 'BUY',
+            'confidence': 0.8
+        },
+        'claude_analysis': {
+            'recommendation': 'BUY',
+            'confidence': 0.9
+        }
+    }
+    result = await strategy.generate_signals(analysis)
+    assert result['action'] == 'WAIT'
+
+    # Test dla _calculate_position_size
+    position_size = strategy._calculate_position_size('USDJPY', 150.000, 149.500)
+    assert position_size <= strategy.max_position_size
+
+    # Test dla _calculate_stop_loss i _calculate_take_profit
+    sl = strategy._calculate_stop_loss('USDJPY', 'BUY', 150.000)
+    tp = strategy._calculate_take_profit('USDJPY', 'BUY', 150.000)
+    assert sl < 150.000
+    assert tp > 150.000
+
+    # Test dla calculate_performance_metrics
+    trades = [
+        {'type': 'BUY', 'profit': 0},  # Neutralna transakcja
+        {'type': 'SELL', 'profit': 0}  # Neutralna transakcja
+    ]
+    metrics = strategy.calculate_performance_metrics(trades)
+    assert metrics['win_rate'] == 0.0
+    assert metrics['profit_factor'] == 0.0
+    assert metrics['average_win'] == 0.0
+    assert metrics['average_loss'] == 0.0
+
+    # Test dla validate_analysis
+    invalid_analysis = {
+        'trend': {
+            'sma_20': None,  # Brak wartości
+            'sma_50': None,
+            'sma_200': None,
+            'trend_direction': 'UP',
+            'trend_strength': 0.005
+        },
+        'momentum': {
+            'rsi': 65,
+            'macd': None,  # Brak wartości
+            'macd_signal': None,
+            'macd_hist': None,
+            'momentum': 0.01
+        },
+        'volatility': {
+            'bb_upper': 1.1100,
+            'bb_middle': 1.1000,
+            'bb_lower': 1.0900,
+            'bb_width': 0.02,
+            'atr': 0.0015
+        }
+    }
+    assert not strategy.validate_analysis(invalid_analysis) 

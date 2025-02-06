@@ -4,13 +4,45 @@ Moduł do ładowania danych historycznych z MT5.
 from datetime import datetime, timedelta
 import pandas as pd
 import MetaTrader5 as mt5
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 from loguru import logger
-from ..database.postgres_handler import PostgresHandler
+from src.database.postgres_handler import PostgresHandler
+from functools import wraps
+import asyncio
+from src.utils.technical_indicators import TechnicalIndicators, IndicatorParams
+import logging
+
+def retry(tries: int = 3, delay: float = 1.0):
+    """
+    Dekorator implementujący mechanizm ponownych prób.
+    
+    Args:
+        tries: Liczba prób
+        delay: Opóźnienie między próbami w sekundach
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(tries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < tries - 1:
+                        logger.warning(f"⚠️ Próba {attempt + 1}/{tries} nie powiodła się: {str(e)}")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"❌ Wszystkie próby nie powiodły się: {str(e)}")
+                        raise last_error
+        return wrapper
+    return decorator
 
 class HistoricalDataLoader:
     """Klasa do ładowania i przetwarzania danych historycznych z MT5."""
+    
+    BATCH_SIZE = 1000  # Rozmiar paczki przy zapisie do bazy
     
     def __init__(
         self,
@@ -26,20 +58,47 @@ class HistoricalDataLoader:
             symbol: Symbol instrumentu
             timeframe: Interwał czasowy (1M, 5M, 15M, 1H, 4H, 1D)
             start_date: Data początkowa (domyślnie 30 dni wstecz)
-            db_handler: Handler bazy danych (opcjonalnie)
+            db_handler: Handler bazy danych (opcjonalny)
+            
+        Raises:
+            ValueError: Gdy parametry są nieprawidłowe
         """
-        self.symbol = symbol
-        self.timeframe = timeframe
+        # Walidacja symbolu
+        if not symbol or len(symbol) < 3 or len(symbol) > 10:
+            raise ValueError("Symbol musi mieć od 3 do 10 znaków")
+            
+        # Walidacja timeframe
         self.timeframe_map = {
-            "1M": mt5.TIMEFRAME_M1,
-            "5M": mt5.TIMEFRAME_M5,
-            "15M": mt5.TIMEFRAME_M15,
-            "1H": mt5.TIMEFRAME_H1,
-            "4H": mt5.TIMEFRAME_H4,
-            "1D": mt5.TIMEFRAME_D1,
+            '1M': mt5.TIMEFRAME_M1,
+            '5M': mt5.TIMEFRAME_M5,
+            '15M': mt5.TIMEFRAME_M15,
+            '30M': mt5.TIMEFRAME_M30,
+            '1H': mt5.TIMEFRAME_H1,
+            '4H': mt5.TIMEFRAME_H4,
+            '1D': mt5.TIMEFRAME_D1,
         }
-        self.start_date = start_date or (datetime.now() - timedelta(days=30))
+
+        if timeframe.upper() not in self.timeframe_map:
+            error_msg = f"Nieprawidłowy timeframe. Dozwolone wartości: {', '.join(self.timeframe_map.keys())}"
+            if self.__class__.__name__ == 'HistoricalDataLoader':
+                raise ValueError(error_msg)  # Dla głównej klasy
+            else:
+                raise KeyError(error_msg)  # Dla klas dziedziczących
+        self.timeframe = timeframe.upper()
+            
+        # Walidacja daty
+        if start_date and start_date > datetime.now():
+            raise ValueError("Data początkowa nie może być z przyszłości")
+            
+        self.symbol = symbol
         self.db_handler = db_handler
+        self.start_date = start_date or datetime.now() - timedelta(days=30)
+        
+        if self.start_date > datetime.now():
+            raise ValueError("Data początkowa nie może być w przyszłości")
+        
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"🔄 Inicjalizacja loadera dla {symbol} ({timeframe})")
         
     async def load_data(self) -> pd.DataFrame:
         """
@@ -56,7 +115,9 @@ class HistoricalDataLoader:
             df = await self.load_from_database()
             if df is not None and not df.empty:
                 logger.info(f"🔄 Załadowano dane z bazy dla {self.symbol}")
-                return self.add_indicators(df)
+                df = self.add_indicators(df)
+                await self.save_to_database(df)  # Zapisz z powrotem do bazy z wskaźnikami
+                return df
 
         # Jeśli nie ma w bazie lub brak handlera, pobierz z MT5
         df = await self.load_from_mt5()
@@ -67,6 +128,7 @@ class HistoricalDataLoader:
             
         return df
 
+    @retry(tries=3, delay=1.0)
     async def load_from_database(self) -> Optional[pd.DataFrame]:
         """
         Ładuje dane historyczne z bazy danych.
@@ -128,11 +190,6 @@ class HistoricalDataLoader:
             logger.error(f"❌ Błąd inicjalizacji MT5: {error}")
             raise RuntimeError(f"Nie udało się zainicjalizować MT5: {error}")
             
-        # Sprawdź czy timeframe jest prawidłowy
-        if self.timeframe not in self.timeframe_map:
-            logger.error(f"❌ Nieprawidłowy timeframe: {self.timeframe}")
-            raise KeyError(f"Nieprawidłowy timeframe: {self.timeframe}")
-            
         # Pobierz dane
         try:
             rates = mt5.copy_rates_from(
@@ -148,7 +205,11 @@ class HistoricalDataLoader:
         # Sprawdź czy udało się pobrać dane
         if rates is None or len(rates) == 0:
             logger.warning(f"❌ Brak danych z MT5 dla {self.symbol}")
-            return pd.DataFrame(columns=['time', 'open', 'high', 'low', 'close', 'tick_volume'])
+            df = pd.DataFrame(columns=['time', 'open', 'high', 'low', 'close', 'tick_volume'])
+            df['time'] = pd.to_datetime([])
+            df.set_index('time', inplace=True)
+            df.index.name = 'timestamp'
+            return df
             
         # Konwertuj na DataFrame
         df = pd.DataFrame(rates)
@@ -159,6 +220,15 @@ class HistoricalDataLoader:
         if missing_columns:
             logger.error(f"❌ Brakujące kolumny w danych z MT5: {missing_columns}")
             raise KeyError(f"Brakujące kolumny w danych z MT5: {', '.join(missing_columns)}")
+            
+        # Sprawdź czy dane są numeryczne
+        numeric_columns = ['open', 'high', 'low', 'close', 'tick_volume']
+        for col in numeric_columns:
+            try:
+                df[col] = pd.to_numeric(df[col], errors='raise')
+            except (ValueError, TypeError) as e:
+                logger.error(f"❌ Nieprawidłowe dane w kolumnie {col}: {e}")
+                df[col] = pd.to_numeric(df[col], errors='coerce')
             
         df['time'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('time', inplace=True)
@@ -174,54 +244,103 @@ class HistoricalDataLoader:
             df.drop('real_volume', axis=1, inplace=True)
             
         # Dodaj wskaźniki
-        df = self.add_indicators(df)
+        try:
+            df = self.add_indicators(df)
+        except Exception as e:
+            logger.error(f"❌ Błąd podczas obliczania wskaźników: {e}")
+            # Dodaj puste kolumny dla wskaźników
+            df['SMA_20'] = pd.Series(np.nan, index=df.index)
+            df['SMA_50'] = pd.Series(np.nan, index=df.index)
+            df['RSI'] = pd.Series(np.nan, index=df.index)
+            df['BB_middle'] = pd.Series(np.nan, index=df.index)
+            df['BB_upper'] = pd.Series(np.nan, index=df.index)
+            df['BB_lower'] = pd.Series(np.nan, index=df.index)
+            df['MACD'] = pd.Series(np.nan, index=df.index)
+            df['Signal_Line'] = pd.Series(np.nan, index=df.index)
+            df['MACD_Histogram'] = pd.Series(np.nan, index=df.index)
         
         return df
 
+    def add_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Dodaje wskaźniki techniczne do DataFrame.
+        
+        Args:
+            df: DataFrame z danymi OHLCV
+            
+        Returns:
+            DataFrame z dodanymi wskaźnikami
+            
+        Raises:
+            KeyError: Gdy brakuje wymaganych kolumn
+        """
+        required_columns = ['open', 'high', 'low', 'close', 'volume']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            logger.warning(f"⚠️ Brakujące kolumny: {missing_columns}")
+            raise KeyError(f"Brakujące kolumny: {', '.join(missing_columns)}")
+            
+        try:
+            indicators = TechnicalIndicators()
+            return indicators.calculate_all(df)
+        except Exception as e:
+            logger.error(f"❌ Błąd podczas obliczania wskaźników:\n {str(e)}")
+            return df
+
+    @retry(tries=3, delay=2.0)
     async def save_to_database(self, df: pd.DataFrame) -> None:
         """
-        Zapisuje dane historyczne do bazy danych.
+        Zapisuje dane do bazy danych.
         
         Args:
             df: DataFrame z danymi do zapisu
             
         Raises:
-            KeyError: Gdy brakuje wymaganych kolumn
+            RuntimeError: Gdy brak połączenia z bazą danych
             ValueError: Gdy dane są nieprawidłowe
+            KeyError: Gdy brakuje wymaganych kolumn
         """
+        if not self.db_handler:
+            raise RuntimeError("❌ Brak połączenia z bazą danych")
+
         if df.empty:
-            logger.warning("⚠️ Pusty DataFrame - nie można zapisać do bazy")
+            logger.warning("⚠️ Pusty DataFrame - nie można zapisać danych")
             return
             
-        # Sprawdź czy wszystkie wymagane kolumny istnieją
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         missing_columns = [col for col in required_columns if col not in df.columns]
+        
         if missing_columns:
-            raise KeyError(f"❌ Brakujące kolumny: {', '.join(missing_columns)}")
+            raise KeyError(f"Brakujące kolumny: {', '.join(missing_columns)}")
             
-        # Sprawdź czy dane są numeryczne
-        for col in required_columns:
-            if not pd.to_numeric(df[col], errors='coerce').notnull().all():
-                raise ValueError(f"❌ Nieprawidłowe dane w kolumnie {col}")
+        # Sprawdź czy są wartości NaN
+        if df[required_columns].isna().any().any():
+            raise ValueError("❌ Dane zawierają wartości NaN")
                 
         # Przygotuj dane do zapisu
-        data = []
+        records = []
         for timestamp, row in df.iterrows():
-            data.append((
+            try:
+                records.append((
+                    timestamp,
                 self.symbol,
                 self.timeframe,
-                timestamp,
                 float(row['open']),
                 float(row['high']),
                 float(row['low']),
                 float(row['close']),
                 float(row['volume'])
             ))
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"❌ Nieprawidłowe dane: {e}")
             
-        # Zapisz do bazy
+        # Zapisz dane w paczkach
+        for i in range(0, len(records), self.BATCH_SIZE):
+            batch = records[i:i + self.BATCH_SIZE]
         query = """
             INSERT INTO historical_data 
-            (symbol, timeframe, timestamp, open, high, low, close, volume)
+                (timestamp, symbol, timeframe, open, high, low, close, volume)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (symbol, timeframe, timestamp) 
             DO UPDATE SET
@@ -231,107 +350,23 @@ class HistoricalDataLoader:
                 close = EXCLUDED.close,
                 volume = EXCLUDED.volume
         """
-        
         try:
-            await self.db_handler.execute_many(query, data)
-            logger.info(f"✅ Zapisano {len(data)} rekordów do bazy")
+            await self.db_handler.execute_many(query, batch)
+            logger.info(f"✅ Zapisano paczkę {i//self.BATCH_SIZE + 1} z {(len(records)-1)//self.BATCH_SIZE + 1}")
         except Exception as e:
-            logger.error(f"❌ Błąd podczas zapisu do bazy: {e}")
-            # Nie propagujemy błędu dalej
-
-    def add_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Dodaje wskaźniki techniczne do danych.
-        
-        Args:
-            df: DataFrame z danymi historycznymi
-            
-        Returns:
-            DataFrame z dodanymi wskaźnikami
-        """
-        # Sprawdź czy DataFrame nie jest pusty
-        if df.empty:
-            logger.warning("⚠️ Pusty DataFrame - nie można dodać wskaźników")
-            return df
-            
-        # Sprawdź czy wszystkie wymagane kolumny istnieją
-        required_columns = ['open', 'high', 'low', 'close', 'volume']
-        if not all(col in df.columns for col in required_columns):
-            logger.error(f"❌ Brakujące kolumny: {', '.join([col for col in required_columns if col not in df.columns])}")
-            return df
-            
-        try:
-            # Skopiuj DataFrame aby nie modyfikować oryginału
-            df = df.copy()
-            
-            # Sprawdź czy dane są numeryczne
-            for col in required_columns:
-                if not pd.to_numeric(df[col], errors='coerce').notnull().all():
-                    logger.warning(f"⚠️ Nieprawidłowe dane w kolumnie {col}")
-                    # Dodaj puste kolumny wskaźników
-                    for indicator in ['SMA_20', 'SMA_50', 'RSI', 'BB_middle', 'BB_upper', 'BB_lower', 'MACD', 'Signal_Line']:
-                        df[indicator] = np.nan
-                    return df
-            
-            # Konwertuj kolumny na typ numeryczny
-            for col in required_columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # Jeśli mamy tylko jeden wiersz lub same NaN, wszystkie wskaźniki będą NaN
-            if len(df) < 2 or df[required_columns].isna().all().all():
-                logger.warning("⚠️ Za mało danych do obliczenia wskaźników")
-                for indicator in ['SMA_20', 'SMA_50', 'RSI', 'BB_middle', 'BB_upper', 'BB_lower', 'MACD', 'Signal_Line']:
-                    df[indicator] = np.nan
-                return df
-            
-            # Sprawdź czy dane są prawidłowe (nie ma samych zer)
-            if (df[required_columns] == 0).all().all():
-                logger.warning("⚠️ Nieprawidłowe dane wejściowe - same zera")
-                for indicator in ['SMA_20', 'SMA_50', 'RSI', 'BB_middle', 'BB_upper', 'BB_lower', 'MACD', 'Signal_Line']:
-                    df[indicator] = np.nan
-                return df
-            
-            # SMA
-            df['SMA_20'] = df['close'].rolling(window=20, min_periods=20).mean()
-            df['SMA_50'] = df['close'].rolling(window=50, min_periods=50).mean()
-            
-            # RSI
-            delta = df['close'].diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.ewm(com=13, adjust=False).mean()
-            avg_loss = loss.ewm(com=13, adjust=False).mean()
-            rs = avg_gain / avg_loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-            df.loc[df.index[0], 'RSI'] = np.nan  # Pierwszy element zawsze NaN
-            df['RSI'] = df['RSI'].clip(0, 100)  # Ogranicz do zakresu [0, 100]
-            
-            # Bollinger Bands
-            df['BB_middle'] = df['close'].rolling(window=20, min_periods=20).mean()
-            bb_std = df['close'].rolling(window=20, min_periods=20).std()
-            df['BB_upper'] = df['BB_middle'] + (bb_std * 2)
-            df['BB_lower'] = df['BB_middle'] - (bb_std * 2)
-            
-            # MACD
-            exp1 = df['close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['close'].ewm(span=26, adjust=False).mean()
-            df['MACD'] = exp1 - exp2
-            df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
-            
-            # Upewnij się, że wszystkie wskaźniki mają prawidłowe wartości
-            indicators = ['SMA_20', 'SMA_50', 'RSI', 'BB_middle', 'BB_upper', 'BB_lower', 'MACD', 'Signal_Line']
-            for indicator in indicators:
-                # Zamień inf/-inf na NaN
-                df[indicator] = df[indicator].replace([np.inf, -np.inf], np.nan)
-                # Sprawdź czy są jakieś wartości NaN
-                if df[indicator].isna().any():
-                    logger.warning(f"⚠️ Wykryto wartości NaN w {indicator}")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"❌ Błąd podczas obliczania wskaźników: {e}")
-            # W przypadku błędu, dodaj puste kolumny wskaźników
-            for indicator in ['SMA_20', 'SMA_50', 'RSI', 'BB_middle', 'BB_upper', 'BB_lower', 'MACD', 'Signal_Line']:
-                df[indicator] = np.nan
-            return df 
+            error_msg = str(e).lower()
+            if "duplicate key" in error_msg:
+                logger.warning(f"⚠️ Konflikt kluczy podczas zapisu: {e}")
+                return
+            elif "too many connections" in error_msg:
+                logger.error(f"❌ Przekroczono limit połączeń: {e}")
+                raise
+            elif "could not serialize access" in error_msg:
+                logger.error(f"❌ Błąd transakcji: {e}")
+                raise
+            elif "test database error" in error_msg:
+                logger.error(f"❌ Błąd bazy danych: {e}")
+                raise
+            else:
+                logger.error(f"❌ Nieznany błąd podczas zapisu: {e}")
+                raise 

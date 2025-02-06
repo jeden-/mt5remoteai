@@ -437,14 +437,14 @@ def test_config_loader_validate_dependencies():
     del invalid_config['trading']
     with pytest.raises(ValueError, match="Brak wymaganej sekcji: trading"):
         ConfigLoader.validate_config_dependencies(invalid_config)
-
+    
     # Test nieprawidłowych zależności stop loss i take profit
     invalid_config = valid_config.copy()
     invalid_config['trading']['stop_loss_pips'] = 100
     invalid_config['trading']['take_profit_pips'] = 50
     with pytest.raises(ValueError, match="Nieprawidłowe zależności: take_profit_pips musi być większe od stop_loss_pips"):
         ConfigLoader.validate_config_dependencies(invalid_config)
-
+    
     # Test nieprawidłowych zależności SMA
     invalid_config = valid_config.copy()
     invalid_config['strategy']['sma_fast'] = 50
@@ -454,7 +454,7 @@ def test_config_loader_validate_dependencies():
     invalid_config['trading']['take_profit_pips'] = 100
     with pytest.raises(ValueError, match="Nieprawidłowe zależności: sma_fast musi być mniejsze od sma_slow"):
         ConfigLoader.validate_config_dependencies(invalid_config)
-
+    
     # Test nieprawidłowych zależności RSI
     invalid_config = valid_config.copy()
     invalid_config['strategy']['rsi_oversold'] = 60
@@ -594,6 +594,10 @@ def test_config_loader_file_operations(tmp_path, monkeypatch):
 
 def test_config_loader_load_error(tmp_path, monkeypatch):
     """Test błędów przy wczytywaniu plików konfiguracyjnych."""
+    # Utwórz plik przed testem
+    json_path = tmp_path / "config.json"
+    json_path.touch()
+    
     # Test błędu otwarcia pliku
     def mock_open(*args, **kwargs):
         raise IOError("Błąd otwarcia pliku")
@@ -601,16 +605,17 @@ def test_config_loader_load_error(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.open", mock_open)
     
     # Test dla JSON
-    json_path = tmp_path / "config.json"
     with pytest.raises(ValueError, match="Błąd parsowania pliku: Błąd otwarcia pliku"):
         ConfigLoader.load_config(str(json_path))
     
     # Test dla YAML
     yaml_path = tmp_path / "config.yaml"
+    yaml_path.touch()
     with pytest.raises(ValueError, match="Błąd parsowania pliku: Błąd otwarcia pliku"):
         ConfigLoader.load_config(str(yaml_path))
     
     # Test dla nieobsługiwanego formatu
     txt_path = tmp_path / "config.txt"
+    txt_path.touch()  # Tworzymy plik przed testem
     with pytest.raises(ValueError, match="Nieobsługiwany format pliku"):
         ConfigLoader.load_config(str(txt_path)) 

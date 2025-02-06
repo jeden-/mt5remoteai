@@ -104,23 +104,28 @@ class ConfigLoader:
             Dict zawierający konfigurację
 
         Raises:
-            FileNotFoundError: Gdy plik nie istnieje
-            ValueError: Gdy format pliku jest nieobsługiwany
+            ValueError: Gdy format pliku jest nieobsługiwany lub wystąpił błąd podczas odczytu
         """
         if not os.path.exists(config_path):
             raise FileNotFoundError("Nie znaleziono pliku konfiguracyjnego")
 
         file_ext = Path(config_path).suffix.lower()
+        if file_ext not in ['.json', '.yml', '.yaml']:
+            raise ValueError("Nieobsługiwany format pliku")
         
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 if file_ext == '.json':
-                    return json.load(f)
-                elif file_ext in ['.yml', '.yaml']:
-                    return yaml.safe_load(f)
-                else:
-                    raise ValueError("Nieobsługiwany format pliku")
-        except (json.JSONDecodeError, yaml.YAMLError) as e:
+                    try:
+                        return json.load(f)
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Błąd parsowania pliku: {str(e)}")
+                else:  # .yml lub .yaml
+                    try:
+                        return yaml.safe_load(f)
+                    except yaml.YAMLError as e:
+                        raise ValueError(f"Błąd parsowania pliku: {str(e)}")
+        except IOError as e:
             raise ValueError(f"Błąd parsowania pliku: {str(e)}")
 
     @staticmethod

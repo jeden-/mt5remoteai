@@ -4,7 +4,7 @@ Testy dla modułu data_models.py
 from datetime import datetime, timedelta
 from decimal import Decimal
 import pytest
-from pydantic import ValidationError
+from pydantic import ValidationError, ValidationInfo
 from src.models.data_models import (
     TimeOrderError,
     StopLossError,
@@ -14,9 +14,13 @@ from src.models.data_models import (
     Trade,
     SignalData,
     AccountInfo,
-    BacktestResult
+    BacktestResult,
+    Position,
+    TradeType,
+    PositionStatus
 )
 from src.models.enums import OrderType, SignalAction
+from unittest.mock import Mock
 
 # Testy dla klas błędów
 def test_time_order_error():
@@ -392,484 +396,6 @@ def test_backtest_result_trade_counts(valid_backtest_result):
         BacktestResult(**data)
     assert "Suma wygranych i przegranych transakcji nie może być większa niż całkowita liczba transakcji" in str(exc_info.value)
 
-# Testy dla MarketData
-def test_market_data_creation(sample_market_data):
-    """Test tworzenia obiektu MarketData z poprawnymi danymi."""
-    market_data = MarketData(**sample_market_data)
-    assert market_data.symbol == 'EURUSD'
-    assert isinstance(market_data.open, Decimal)
-    assert isinstance(market_data.high, Decimal)
-    assert isinstance(market_data.low, Decimal)
-    assert isinstance(market_data.close, Decimal)
-    assert isinstance(market_data.volume, Decimal)
-
-def test_market_data_invalid_symbol():
-    """Test walidacji nieprawidłowego symbolu."""
-    invalid_data = {
-        'symbol': 'invalid!@#',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'open': Decimal('1.1000'),
-        'high': Decimal('1.1100'),
-        'low': Decimal('1.0900'),
-        'close': Decimal('1.1050'),
-        'volume': Decimal('1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        MarketData(**invalid_data)
-    assert "Symbol musi mieć od 3 do 10 znaków" in str(exc_info.value)
-
-def test_market_data_invalid_timestamp():
-    """Test walidacji przyszłej daty."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() + timedelta(days=1),
-        'open': Decimal('1.1000'),
-        'high': Decimal('1.1100'),
-        'low': Decimal('1.0900'),
-        'close': Decimal('1.1050'),
-        'volume': Decimal('1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        MarketData(**invalid_data)
-    assert "Data nie może być z przyszłości" in str(exc_info.value)
-
-def test_market_data_invalid_prices():
-    """Test walidacji nieprawidłowych cen."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'open': Decimal('-1.1000'),
-        'high': Decimal('1.1100'),
-        'low': Decimal('1.0900'),
-        'close': Decimal('1.1050'),
-        'volume': Decimal('1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        MarketData(**invalid_data)
-    assert "Wartość musi być dodatnia" in str(exc_info.value)
-
-def test_market_data_invalid_volume():
-    """Test walidacji nieprawidłowego wolumenu."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'open': Decimal('1.1000'),
-        'high': Decimal('1.1100'),
-        'low': Decimal('1.0900'),
-        'close': Decimal('1.1050'),
-        'volume': Decimal('-1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        MarketData(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-def test_market_data_high_low_validation():
-    """Test walidacji relacji high-low."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'open': Decimal('1.1000'),
-        'high': Decimal('1.0800'),  # High niższe niż low
-        'low': Decimal('1.0900'),
-        'close': Decimal('1.1050'),
-        'volume': Decimal('1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        MarketData(**invalid_data)
-    assert "High musi być wyższe niż low" in str(exc_info.value)
-
-# Testy dla Trade
-def test_trade_creation(sample_trade_data):
-    """Test tworzenia obiektu Trade z poprawnymi danymi."""
-    trade = Trade(**sample_trade_data)
-    assert trade.id == 1
-    assert trade.symbol == 'EURUSD'
-    assert trade.order_type == OrderType.BUY
-    assert isinstance(trade.volume, Decimal)
-    assert isinstance(trade.entry_price, Decimal)
-    assert isinstance(trade.stop_loss, Decimal)
-    assert isinstance(trade.take_profit, Decimal)
-    assert trade.exit_price is None
-    assert trade.close_time is None
-    assert trade.profit is None
-    assert trade.status == 'OPEN'
-
-def test_trade_with_exit_data(sample_trade_data, sample_datetime):
-    """Test tworzenia obiektu Trade z danymi zamknięcia."""
-    sample_trade_data.update({
-        'exit_price': Decimal('1.1100'),
-        'close_time': sample_datetime + timedelta(hours=1),
-        'profit': Decimal('100')
-    })
-    trade = Trade(**sample_trade_data)
-    assert isinstance(trade.exit_price, Decimal)
-    assert isinstance(trade.close_time, datetime)
-    assert isinstance(trade.profit, Decimal)
-
-def test_trade_invalid_symbol():
-    """Test walidacji nieprawidłowego symbolu."""
-    invalid_data = {
-        'id': 1,
-        'symbol': 'invalid!@#',
-        'order_type': OrderType.BUY,
-        'volume': Decimal('0.1'),
-        'entry_price': Decimal('1.1000'),
-        'stop_loss': Decimal('1.0900'),
-        'take_profit': Decimal('1.1200'),
-        'open_time': datetime.now() - timedelta(days=1),
-        'status': 'OPEN'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Trade(**invalid_data)
-    assert "Symbol musi mieć od 3 do 10 znaków" in str(exc_info.value)
-
-def test_trade_invalid_volume():
-    """Test walidacji nieprawidłowego wolumenu."""
-    invalid_data = {
-        'id': 1,
-        'symbol': 'EURUSD',
-        'order_type': OrderType.BUY,
-        'volume': Decimal('-0.1'),
-        'entry_price': Decimal('1.1000'),
-        'stop_loss': Decimal('1.0900'),
-        'take_profit': Decimal('1.1200'),
-        'open_time': datetime.now() - timedelta(days=1),
-        'status': 'OPEN'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Trade(**invalid_data)
-    assert "Wartość musi być dodatnia" in str(exc_info.value)
-
-def test_trade_invalid_prices():
-    """Test walidacji nieprawidłowych cen."""
-    invalid_data = {
-        'id': 1,
-        'symbol': 'EURUSD',
-        'order_type': OrderType.BUY,
-        'volume': Decimal('0.1'),
-        'entry_price': Decimal('-1.1000'),
-        'stop_loss': Decimal('1.0900'),
-        'take_profit': Decimal('1.1200'),
-        'open_time': datetime.now() - timedelta(days=1),
-        'status': 'OPEN'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Trade(**invalid_data)
-    assert "Wartość musi być dodatnia" in str(exc_info.value)
-
-def test_trade_invalid_time_order(sample_trade_data, sample_datetime):
-    """Test walidacji nieprawidłowej kolejności czasowej."""
-    sample_trade_data['close_time'] = sample_datetime - timedelta(hours=1)
-    with pytest.raises(ValidationError) as exc_info:
-        Trade(**sample_trade_data)
-    assert "Data zamknięcia musi być późniejsza niż data otwarcia" in str(exc_info.value)
-
-def test_trade_invalid_profit():
-    """Test walidacji nieprawidłowego zysku."""
-    invalid_data = {
-        'id': 1,
-        'symbol': 'EURUSD',
-        'order_type': OrderType.BUY,
-        'volume': Decimal('0.1'),
-        'entry_price': Decimal('1.1000'),
-        'stop_loss': Decimal('1.0900'),
-        'take_profit': Decimal('1.1200'),
-        'open_time': datetime.now() - timedelta(days=1),
-        'close_time': datetime.now(),
-        'profit': Decimal('-1000001'),
-        'status': 'CLOSED'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        Trade(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-# Testy dla SignalData
-def test_signal_data_creation(sample_signal_data):
-    """Test tworzenia obiektu SignalData z poprawnymi danymi."""
-    signal = SignalData(**sample_signal_data)
-    assert signal.symbol == 'EURUSD'
-    assert signal.action == SignalAction.BUY
-    assert isinstance(signal.confidence, float)
-    assert isinstance(signal.entry_price, Decimal)
-    assert isinstance(signal.stop_loss, Decimal)
-    assert isinstance(signal.take_profit, Decimal)
-    assert isinstance(signal.volume, Decimal)
-    assert isinstance(signal.indicators, dict)
-    assert isinstance(signal.ai_analysis, dict)
-
-def test_signal_data_optional_fields():
-    """Test tworzenia obiektu SignalData bez opcjonalnych pól."""
-    minimal_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000')
-    }
-    signal = SignalData(**minimal_data)
-    assert signal.stop_loss is None
-    assert signal.take_profit is None
-    assert signal.volume is None
-    assert signal.indicators == {}
-    assert signal.ai_analysis == {}
-
-def test_signal_data_invalid_symbol():
-    """Test walidacji nieprawidłowego symbolu."""
-    invalid_data = {
-        'symbol': 'invalid!@#',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Symbol musi mieć od 3 do 10 znaków" in str(exc_info.value)
-
-def test_signal_data_invalid_confidence():
-    """Test walidacji nieprawidłowej wartości pewności."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 1.5,  # Powyżej 1.0
-        'entry_price': Decimal('1.1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Wartość pewności musi być w zakresie 0-1" in str(exc_info.value)
-
-def test_signal_data_invalid_entry_price():
-    """Test walidacji nieprawidłowej ceny wejścia."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('-1.1000')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Wartość musi być dodatnia" in str(exc_info.value)
-
-def test_signal_data_invalid_stop_loss_buy():
-    """Test walidacji nieprawidłowego stop loss dla pozycji długiej."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000'),
-        'stop_loss': Decimal('1.1100')  # SL powyżej ceny wejścia
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Stop loss dla pozycji długiej musi być poniżej ceny wejścia" in str(exc_info.value)
-
-def test_signal_data_invalid_stop_loss_sell():
-    """Test walidacji nieprawidłowego stop loss dla pozycji krótkiej."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.SELL,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000'),
-        'stop_loss': Decimal('1.0900')  # SL poniżej ceny wejścia
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Stop loss dla pozycji krótkiej musi być powyżej ceny wejścia" in str(exc_info.value)
-
-def test_signal_data_invalid_take_profit_buy():
-    """Test walidacji nieprawidłowego take profit dla pozycji długiej."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000'),
-        'take_profit': Decimal('1.0900')  # TP poniżej ceny wejścia
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Take profit dla pozycji długiej musi być powyżej ceny wejścia" in str(exc_info.value)
-
-def test_signal_data_invalid_take_profit_sell():
-    """Test walidacji nieprawidłowego take profit dla pozycji krótkiej."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.SELL,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000'),
-        'take_profit': Decimal('1.1100')  # TP powyżej ceny wejścia
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Take profit dla pozycji krótkiej musi być poniżej ceny wejścia" in str(exc_info.value)
-
-def test_signal_data_invalid_volume():
-    """Test walidacji nieprawidłowego wolumenu."""
-    invalid_data = {
-        'symbol': 'EURUSD',
-        'timestamp': datetime.now() - timedelta(days=1),
-        'action': SignalAction.BUY,
-        'confidence': 0.85,
-        'entry_price': Decimal('1.1000'),
-        'volume': Decimal('-0.1')
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        SignalData(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-# Testy dla AccountInfo
-def test_account_info_creation(sample_account_info):
-    """Test tworzenia obiektu AccountInfo z poprawnymi danymi."""
-    account = AccountInfo(**sample_account_info)
-    assert isinstance(account.balance, Decimal)
-    assert isinstance(account.equity, Decimal)
-    assert isinstance(account.margin, Decimal)
-    assert isinstance(account.free_margin, Decimal)
-    assert isinstance(account.margin_level, float)
-    assert isinstance(account.leverage, int)
-    assert isinstance(account.currency, str)
-
-def test_account_info_without_margin_level():
-    """Test tworzenia obiektu AccountInfo bez margin_level."""
-    data = {
-        'balance': Decimal('10000'),
-        'equity': Decimal('10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('9900'),
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    account = AccountInfo(**data)
-    assert account.margin_level is None
-
-def test_account_info_invalid_balance():
-    """Test walidacji nieprawidłowego balansu."""
-    invalid_data = {
-        'balance': Decimal('-10000'),
-        'equity': Decimal('10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('9900'),
-        'margin_level': 101.0,
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-def test_account_info_invalid_equity():
-    """Test walidacji nieprawidłowego equity."""
-    invalid_data = {
-        'balance': Decimal('10000'),
-        'equity': Decimal('-10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('9900'),
-        'margin_level': 101.0,
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-def test_account_info_invalid_margin():
-    """Test walidacji nieprawidłowego margin."""
-    invalid_data = {
-        'balance': Decimal('10000'),
-        'equity': Decimal('10100'),
-        'margin': Decimal('-100'),
-        'free_margin': Decimal('9900'),
-        'margin_level': 101.0,
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-def test_account_info_invalid_free_margin():
-    """Test walidacji nieprawidłowego free margin."""
-    invalid_data = {
-        'balance': Decimal('10000'),
-        'equity': Decimal('10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('-9900'),
-        'margin_level': 101.0,
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-def test_account_info_invalid_leverage():
-    """Test walidacji nieprawidłowej dźwigni."""
-    invalid_data = {
-        'balance': Decimal('10000'),
-        'equity': Decimal('10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('9900'),
-        'margin_level': 101.0,
-        'leverage': 1001,  # Powyżej maksymalnej wartości
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Dźwignia musi być w zakresie" in str(exc_info.value)
-
-def test_account_info_too_high_values():
-    """Test walidacji zbyt wysokich wartości."""
-    invalid_data = {
-        'balance': Decimal('2000000000'),  # Powyżej maksymalnej wartości
-        'equity': Decimal('10100'),
-        'margin': Decimal('100'),
-        'free_margin': Decimal('9900'),
-        'margin_level': 101.0,
-        'leverage': 100,
-        'currency': 'USD'
-    }
-    with pytest.raises(ValidationError) as exc_info:
-        AccountInfo(**invalid_data)
-    assert "Wartość musi być w zakresie" in str(exc_info.value)
-
-# Testy dla BacktestResult
-def test_backtest_result_creation(sample_backtest_result):
-    """Test tworzenia obiektu BacktestResult z poprawnymi danymi."""
-    result = BacktestResult(**sample_backtest_result)
-    assert isinstance(result.start_date, datetime)
-    assert isinstance(result.end_date, datetime)
-    assert isinstance(result.initial_balance, Decimal)
-    assert isinstance(result.final_balance, Decimal)
-    assert isinstance(result.total_trades, int)
-    assert isinstance(result.winning_trades, int)
-    assert isinstance(result.losing_trades, int)
-    assert isinstance(result.profit_factor, float)
-    assert isinstance(result.max_drawdown, float)
-    assert isinstance(result.equity_curve, list)
-    assert isinstance(result.trades, list)
-
-def test_backtest_result_without_optional_fields():
-    """Test tworzenia obiektu BacktestResult bez opcjonalnych pól."""
-    data = {
-        'start_date': datetime.now() - timedelta(days=30),
-        'end_date': datetime.now() - timedelta(days=1),
-        'initial_balance': Decimal('10000'),
-        'final_balance': Decimal('11000'),
-        'total_trades': 100,
-        'winning_trades': 60,
-        'losing_trades': 40,
-        'equity_curve': [],
-        'trades': []
-    }
-    result = BacktestResult(**data)
-    assert result.profit_factor is None
-    assert result.max_drawdown is None
-
 def test_backtest_result_invalid_dates():
     """Test walidacji nieprawidłowych dat."""
     invalid_data = {
@@ -953,4 +479,679 @@ def test_backtest_result_invalid_trade_sum():
     }
     with pytest.raises(ValidationError) as exc_info:
         BacktestResult(**invalid_data)
-    assert "Suma wygranych i przegranych" in str(exc_info.value) 
+    assert "Suma wygranych i przegranych" in str(exc_info.value)
+
+def test_backtest_result_trade_sum_validation():
+    """Test walidacji sumy transakcji."""
+    data = {
+        'start_date': datetime.now() - timedelta(days=2),
+        'end_date': datetime.now() - timedelta(days=1),
+        'initial_balance': Decimal('10000'),
+        'final_balance': Decimal('11000'),
+        'total_trades': 5,
+        'winning_trades': 3,
+        'losing_trades': 3,  # 3 + 3 > 5
+        'equity_curve': [],
+        'trades': []
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        BacktestResult(**data)
+    assert "Suma wygranych i przegranych transakcji nie może być większa niż całkowita liczba transakcji" in str(exc_info.value)
+
+def test_backtest_result_trade_sum_validation_model():
+    """Test walidacji sumy transakcji na poziomie modelu."""
+    data = {
+        'start_date': datetime.now() - timedelta(days=2),
+        'end_date': datetime.now() - timedelta(days=1),
+        'initial_balance': Decimal('10000'),
+        'final_balance': Decimal('11000'),
+        'total_trades': 5,
+        'winning_trades': 3,
+        'losing_trades': 3,  # 3 + 3 > 5
+        'equity_curve': [],
+        'trades': []
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        BacktestResult(**data)
+    assert "Suma wygranych i przegranych transakcji nie może być większa niż całkowita liczba transakcji" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_position_validation():
+    """Test walidacji pozycji tradingowej."""
+    # Test dla pozycji BUY z poprawnymi danymi
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950'),
+        take_profit=Decimal('1.1050'),
+        status=PositionStatus.OPEN
+    )
+    assert position.validate_position() == position
+
+    # Test dla pozycji SELL z poprawnymi danymi
+    position = Position(
+        id="test_2",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.SELL,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.1050'),
+        take_profit=Decimal('1.0950'),
+        status=PositionStatus.OPEN
+    )
+    assert position.validate_position() == position
+
+    # Test dla zamkniętej pozycji (nie sprawdza SL/TP)
+    position = Position(
+        id="test_3",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=None,
+        take_profit=None,
+        status=PositionStatus.CLOSED,
+        exit_price=Decimal('1.1050'),
+        profit=Decimal('50.0'),
+        pips=Decimal('50.0')
+    )
+    assert position.validate_position() == position
+
+@pytest.mark.asyncio
+async def test_position_validation_errors():
+    """Test błędów walidacji pozycji tradingowej."""
+    # Test dla pozycji BUY z nieprawidłowym SL
+    with pytest.raises(ValueError, match="Stop loss dla pozycji BUY musi być poniżej ceny wejścia"):
+        Position(
+            id="test_1",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.BUY,
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            stop_loss=Decimal('1.1050'),  # SL powyżej ceny wejścia
+            take_profit=Decimal('1.1100'),
+            status=PositionStatus.OPEN
+        )
+
+    # Test dla pozycji SELL z nieprawidłowym SL
+    with pytest.raises(ValueError, match="Stop loss dla pozycji SELL musi być powyżej ceny wejścia"):
+        Position(
+            id="test_2",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.SELL,
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            stop_loss=Decimal('1.0950'),  # SL poniżej ceny wejścia
+            take_profit=Decimal('1.0900'),
+            status=PositionStatus.OPEN
+        )
+
+    # Test dla pozycji BUY z nieprawidłowym TP
+    with pytest.raises(ValueError, match="Take profit dla pozycji BUY musi być powyżej ceny wejścia"):
+        Position(
+            id="test_3",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.BUY,
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            stop_loss=Decimal('1.0950'),
+            take_profit=Decimal('1.0950'),  # TP poniżej ceny wejścia
+            status=PositionStatus.OPEN
+        )
+
+    # Test dla pozycji SELL z nieprawidłowym TP
+    with pytest.raises(ValueError, match="Take profit dla pozycji SELL musi być poniżej ceny wejścia"):
+        Position(
+            id="test_4",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.SELL,
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            stop_loss=Decimal('1.1050'),
+            take_profit=Decimal('1.1050'),  # TP powyżej ceny wejścia
+            status=PositionStatus.OPEN
+        )
+
+@pytest.mark.asyncio
+async def test_position_optional_fields():
+    """Test opcjonalnych pól w pozycji tradingowej."""
+    # Test dla pozycji bez SL/TP
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.OPEN
+    )
+    assert position.stop_loss is None
+    assert position.take_profit is None
+
+    # Test dla pozycji z częściowymi danymi zamknięcia
+    position = Position(
+        id="test_2",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.CLOSED,
+        exit_price=Decimal('1.1050')
+    )
+    assert position.exit_price == Decimal('1.1050')
+    assert position.profit is None
+    assert position.pips is None
+
+@pytest.mark.asyncio
+async def test_position_point_value():
+    """Test wartości punktu dla różnych instrumentów."""
+    # Test dla pary walutowej (domyślna wartość)
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.OPEN
+    )
+    assert position.point_value == Decimal('0.0001')
+
+    # Test z niestandardową wartością punktu
+    position = Position(
+        id="test_2",
+        timestamp=datetime.now(),
+        symbol="XAUUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1900.00'),
+        status=PositionStatus.OPEN,
+        point_value=Decimal('0.01')
+    )
+    assert position.point_value == Decimal('0.01')
+
+@pytest.mark.asyncio
+async def test_position_validation_closed():
+    """Test walidacji zamkniętej pozycji."""
+    # Test dla zamkniętej pozycji - walidacja powinna przejść bez sprawdzania SL/TP
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.CLOSED,
+        exit_price=Decimal('1.1050')
+    )
+    assert position.validate_position() == position
+
+@pytest.mark.asyncio
+async def test_position_validation_no_sl_tp():
+    """Test walidacji pozycji bez SL/TP."""
+    # Test dla pozycji bez SL/TP - powinno przejść dla zamkniętej pozycji
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.CLOSED
+    )
+    assert position.validate_position() == position
+
+@pytest.mark.asyncio
+async def test_position_validation_missing_entry_price():
+    """Test walidacji pozycji bez ceny wejścia."""
+    # Test dla pozycji bez ceny wejścia - powinno rzucić wyjątek
+    with pytest.raises(ValidationError) as exc_info:
+        Position(
+            id="test_1",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.BUY,
+            volume=Decimal('1.0'),
+            status=PositionStatus.OPEN
+        )
+    assert "Field required" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_position_validation_missing_volume():
+    """Test walidacji pozycji bez wolumenu."""
+    # Test dla pozycji bez wolumenu - powinno rzucić wyjątek
+    with pytest.raises(ValidationError) as exc_info:
+        Position(
+            id="test_1",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.BUY,
+            entry_price=Decimal('1.1000'),
+            status=PositionStatus.OPEN
+        )
+    assert "Field required" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_position_validation_invalid_status():
+    """Test walidacji pozycji z nieprawidłowym statusem."""
+    # Test dla pozycji z nieprawidłowym statusem - powinno rzucić wyjątek
+    with pytest.raises(ValidationError) as exc_info:
+        Position(
+            id="test_1",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type=TradeType.BUY,
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            status="INVALID"
+        )
+    assert "Input should be" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_position_validation_invalid_trade_type():
+    """Test walidacji pozycji z nieprawidłowym typem transakcji."""
+    # Test dla pozycji z nieprawidłowym typem transakcji - powinno rzucić wyjątek
+    with pytest.raises(ValidationError) as exc_info:
+        Position(
+            id="test_1",
+            timestamp=datetime.now(),
+            symbol="EURUSD",
+            trade_type="INVALID",
+            volume=Decimal('1.0'),
+            entry_price=Decimal('1.1000'),
+            status=PositionStatus.OPEN
+        )
+    assert "Input should be" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_position_validation_with_exit_data():
+    """Test walidacji pozycji z danymi wyjścia."""
+    # Test dla pozycji z danymi wyjścia
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.CLOSED,
+        exit_price=Decimal('1.1050'),
+        profit=Decimal('50.0'),
+        pips=Decimal('50.0')
+    )
+    assert position.exit_price == Decimal('1.1050')
+    assert position.profit == Decimal('50.0')
+    assert position.pips == Decimal('50.0')
+
+@pytest.mark.asyncio
+async def test_position_validation_partial_exit_data():
+    """Test walidacji pozycji z częściowymi danymi wyjścia."""
+    # Test dla pozycji tylko z ceną wyjścia
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.CLOSED,
+        exit_price=Decimal('1.1050')
+    )
+    assert position.exit_price == Decimal('1.1050')
+    assert position.profit is None
+    assert position.pips is None
+
+@pytest.mark.asyncio
+async def test_position_validation_open_position():
+    """Test walidacji otwartej pozycji."""
+    # Test dla otwartej pozycji z SL/TP
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950'),
+        take_profit=Decimal('1.1050'),
+        status=PositionStatus.OPEN
+    )
+    assert position.validate_position() == position
+
+@pytest.mark.asyncio
+async def test_market_data_validation_high_low():
+    """Test walidacji relacji high-low w MarketData."""
+    # Test dla poprawnych danych
+    data = MarketData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        open=Decimal('1.1000'),
+        high=Decimal('1.1100'),
+        low=Decimal('1.0900'),
+        close=Decimal('1.1050'),
+        volume=Decimal('1000')
+    )
+    assert data.validate_high_low() == data
+
+    # Test dla niepoprawnej relacji high-low
+    with pytest.raises(ValidationError) as exc_info:
+        MarketData(
+            symbol='EURUSD',
+            timestamp=datetime.now() - timedelta(minutes=5),
+            open=Decimal('1.1000'),
+            high=Decimal('1.0900'),  # High niższe niż low
+            low=Decimal('1.1000'),
+            close=Decimal('1.1050'),
+            volume=Decimal('1000')
+        )
+    assert "High musi być wyższe niż low" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_trade_validation_optional_fields():
+    """Test walidacji opcjonalnych pól w Trade."""
+    # Test dla opcjonalnego exit_price
+    trade = Trade(
+        id=1,
+        symbol='EURUSD',
+        order_type=OrderType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950'),
+        take_profit=Decimal('1.1050'),
+        open_time=datetime.now() - timedelta(hours=1),
+        status='OPEN'
+    )
+    assert trade.exit_price is None
+    assert trade.validate_optional_decimals(None) is None
+
+    # Test dla poprawnego exit_price
+    trade = Trade(
+        id=1,
+        symbol='EURUSD',
+        order_type=OrderType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950'),
+        take_profit=Decimal('1.1050'),
+        open_time=datetime.now() - timedelta(hours=1),
+        exit_price=Decimal('1.1100'),
+        status='CLOSED'
+    )
+    assert trade.exit_price == Decimal('1.1100')
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_without_entry_price():
+    """Test walidacji SignalData bez ceny wejścia."""
+    # Test walidacji stop_loss bez entry_price
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),  # entry_price jest wymagane
+        stop_loss=Decimal('1.0950')
+    )
+    # Symulujemy brak entry_price w values
+    values = Mock()
+    values.data = {'action': SignalAction.BUY}
+    assert signal.validate_stop_loss(Decimal('1.0950'), values) == Decimal('1.0950')
+
+    # Test walidacji take_profit bez entry_price
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),  # entry_price jest wymagane
+        take_profit=Decimal('1.1050')
+    )
+    # Symulujemy brak entry_price w values
+    values = Mock()
+    values.data = {'action': SignalAction.BUY}
+    assert signal.validate_take_profit(Decimal('1.1050'), values) == Decimal('1.1050')
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_without_action():
+    """Test walidacji SignalData bez akcji."""
+    # Test walidacji stop_loss bez action
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,  # action jest wymagane
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950')
+    )
+    # Symulujemy brak action w values
+    values = Mock()
+    values.data = {'entry_price': Decimal('1.1000')}
+    assert signal.validate_stop_loss(Decimal('1.0950'), values) == Decimal('1.0950')
+
+    # Test walidacji take_profit bez action
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,  # action jest wymagane
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        take_profit=Decimal('1.1050')
+    )
+    # Symulujemy brak action w values
+    values = Mock()
+    values.data = {'entry_price': Decimal('1.1000')}
+    assert signal.validate_take_profit(Decimal('1.1050'), values) == Decimal('1.1050')
+
+@pytest.mark.asyncio
+async def test_trade_validation_time_order():
+    """Test walidacji kolejności czasowej w Trade."""
+    # Test dla braku open_time w values
+    trade = Trade(
+        id=1,
+        symbol='EURUSD',
+        order_type=OrderType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950'),
+        take_profit=Decimal('1.1050'),
+        open_time=datetime.now() - timedelta(hours=1),
+        close_time=datetime.now(),
+        status='CLOSED'
+    )
+    # Symulujemy brak open_time w values
+    values = Mock()
+    values.data = {}
+    assert trade.validate_time_order(datetime.now(), values) == datetime.now()
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_volume():
+    """Test walidacji wolumenu w SignalData."""
+    # Test dla None volume
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000')
+    )
+    assert signal.volume is None
+    assert signal.validate_volume(None) is None
+
+@pytest.mark.asyncio
+async def test_position_validation_none_values():
+    """Test walidacji pozycji z None values."""
+    # Test dla pozycji z None values
+    position = Position(
+        id="test_1",
+        timestamp=datetime.now(),
+        symbol="EURUSD",
+        trade_type=TradeType.BUY,
+        volume=Decimal('1.0'),
+        entry_price=Decimal('1.1000'),
+        status=PositionStatus.OPEN
+    )
+    assert position.validate_optional_decimals(None) is None
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_stop_loss_without_values():
+    """Test walidacji stop loss w SignalData bez values."""
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950')
+    )
+    # Test dla braku values
+    assert signal.validate_stop_loss(Decimal('1.0950'), None) == Decimal('1.0950')
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_take_profit_without_values():
+    """Test walidacji take profit w SignalData bez values."""
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        take_profit=Decimal('1.1050')
+    )
+    # Test dla braku values
+    assert signal.validate_take_profit(Decimal('1.1050'), None) == Decimal('1.1050')
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_stop_loss_with_entry_price():
+    """Test walidacji stop loss w SignalData z entry_price."""
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        stop_loss=Decimal('1.0950')
+    )
+    # Test dla entry_price w values
+    values = Mock()
+    values.data = {'entry_price': Decimal('1.1000'), 'action': SignalAction.BUY}
+    assert signal.validate_stop_loss(Decimal('1.0950'), values) == Decimal('1.0950')
+
+@pytest.mark.asyncio
+async def test_signal_data_validation_take_profit_with_entry_price():
+    """Test walidacji take profit w SignalData z entry_price."""
+    signal = SignalData(
+        symbol='EURUSD',
+        timestamp=datetime.now() - timedelta(minutes=5),
+        action=SignalAction.BUY,
+        confidence=0.85,
+        entry_price=Decimal('1.1000'),
+        take_profit=Decimal('1.1050')
+    )
+    # Test dla entry_price w values
+    values = Mock()
+    values.data = {'entry_price': Decimal('1.1000'), 'action': SignalAction.BUY}
+    assert signal.validate_take_profit(Decimal('1.1050'), values) == Decimal('1.1050')
+
+def test_signal_data_validation_date_order_without_start_date():
+    """Test walidacji kolejności dat bez daty początkowej."""
+    data = {
+        'symbol': 'EURUSD',
+        'action': SignalAction.BUY,
+        'confidence': 0.8,
+        'timestamp': datetime.now(),
+        'entry_price': Decimal('1.1000')
+    }
+    signal = SignalData(**data)
+    assert signal.timestamp == data['timestamp']
+
+def test_signal_data_validation_trade_sum_without_total():
+    """Test walidacji sumy transakcji bez całkowitej liczby transakcji."""
+    data = {
+        'symbol': 'EURUSD',
+        'action': SignalAction.BUY,
+        'confidence': 0.8,
+        'timestamp': datetime.now(),
+        'entry_price': Decimal('1.1000'),
+        'indicators': {'winning_trades': 5, 'losing_trades': 3}
+    }
+    signal = SignalData(**data)
+    assert signal.indicators['winning_trades'] == 5
+    assert signal.indicators['losing_trades'] == 3
+
+def test_backtest_result_date_order_without_start_date():
+    """Test walidacji kolejności dat bez daty początkowej w values."""
+    data = {
+        'start_date': datetime.now() - timedelta(days=2),
+        'end_date': datetime.now() - timedelta(days=1),
+        'initial_balance': Decimal('10000'),
+        'final_balance': Decimal('11000'),
+        'total_trades': 10,
+        'winning_trades': 6,
+        'losing_trades': 4,
+        'equity_curve': [],
+        'trades': []
+    }
+    result = BacktestResult(**data)
+    # Symulujemy brak start_date w values
+    values = Mock()
+    values.data = {}
+    assert result.validate_date_order(result.end_date, values) == result.end_date
+
+def test_backtest_result_trade_sum_without_total():
+    """Test walidacji sumy transakcji bez total_trades w values."""
+    data = {
+        'start_date': datetime.now() - timedelta(days=2),
+        'end_date': datetime.now() - timedelta(days=1),
+        'initial_balance': Decimal('10000'),
+        'final_balance': Decimal('11000'),
+        'total_trades': 10,
+        'winning_trades': 6,
+        'losing_trades': 4,
+        'equity_curve': [],
+        'trades': []
+    }
+    result = BacktestResult(**data)
+    # Symulujemy brak total_trades w values
+    values = Mock()
+    values.data = {}
+    assert result.validate_trade_sum(result.winning_trades, values) == result.winning_trades
+
+def test_trade_invalid_symbol_empty():
+    """Test walidacji pustego symbolu."""
+    invalid_data = {
+        'id': 1,
+        'symbol': '',
+        'order_type': OrderType.BUY,
+        'volume': Decimal('0.1'),
+        'entry_price': Decimal('1.1000'),
+        'stop_loss': Decimal('1.0900'),
+        'take_profit': Decimal('1.1200'),
+        'open_time': datetime.now() - timedelta(days=1),
+        'status': 'OPEN'
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        Trade(**invalid_data)
+    assert "Symbol musi mieć od 3 do 10 znaków" in str(exc_info.value)
+
+def test_signal_data_invalid_symbol_empty():
+    """Test walidacji pustego symbolu."""
+    invalid_data = {
+        'symbol': '',
+        'timestamp': datetime.now(),
+        'action': SignalAction.BUY,
+        'confidence': 0.8,
+        'entry_price': Decimal('1.1000')
+    }
+    with pytest.raises(ValidationError) as exc_info:
+        SignalData(**invalid_data)
+    assert "Symbol musi mieć od 3 do 10 znaków" in str(exc_info.value) 

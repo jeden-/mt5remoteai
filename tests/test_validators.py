@@ -176,4 +176,34 @@ def test_model_validator_timestamp():
     # Niepoprawne wartości
     future = datetime.now() + timedelta(days=1)
     with pytest.raises(DatetimePastError):
-        validator.validate_timestamp(future) 
+        validator.validate_timestamp(future)
+
+
+def test_confidence_error_message():
+    """Test wiadomości błędu ConfidenceError."""
+    error = ConfidenceError()
+    assert str(error) == 'Wartość pewności musi być w zakresie 0-1'
+    
+    # Test tworzenia instancji
+    error2 = ConfidenceError()
+    assert isinstance(error2, ValueError)
+    assert isinstance(error2, ConfidenceError)
+    
+    # Test wywołania __init__
+    error3 = ConfidenceError()
+    assert error3.__init__() is None
+
+
+def test_model_validator_positive_decimal():
+    """Test walidacji dodatnich wartości dziesiętnych w ModelValidator."""
+    validator = ModelValidator()
+    
+    # Poprawne wartości
+    validator.validate_positive_decimal(Decimal('1.0'), 'test_field')
+    validator.validate_positive_decimal(Decimal('0.1'), 'test_field')
+    
+    # Niepoprawne wartości
+    with pytest.raises(DecimalPositiveError):
+        validator.validate_positive_decimal(Decimal('0'), 'test_field')
+    with pytest.raises(DecimalPositiveError):
+        validator.validate_positive_decimal(Decimal('-1.0'), 'test_field') 

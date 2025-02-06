@@ -46,6 +46,7 @@ class PostgresHandler:
 
     def __init__(
         self,
+        config: Optional[Dict[str, Any]] = None,
         user: str = 'postgres',
         password: str = 'mt5remote',
         database: str = 'mt5remotetest',
@@ -60,6 +61,7 @@ class PostgresHandler:
         Inicjalizuje handler bazy danych.
 
         Args:
+            config: Opcjonalny słownik konfiguracyjny
             user: Nazwa użytkownika bazy danych
             password: Hasło do bazy danych
             database: Nazwa bazy danych
@@ -70,14 +72,28 @@ class PostgresHandler:
             command_timeout: Timeout dla komend w sekundach
             ssl: Czy używać SSL
         """
-        self.user = user
-        self.password = password
-        self.database = database
-        self.host = host
-        self.port = port
-        self.min_size = min_size
-        self.max_size = max_size
-        self.command_timeout = command_timeout
+        if config and 'database' in config:
+            db_config = config['database']
+            self.user = db_config.get('user', user)
+            self.password = db_config.get('password', password)
+            self.database = db_config.get('name', database)
+            self.host = db_config.get('host', host)
+            self.port = db_config.get('port', port)
+            
+            pool_config = db_config.get('pool', {})
+            self.min_size = pool_config.get('min_size', min_size)
+            self.max_size = pool_config.get('max_size', max_size)
+            self.command_timeout = pool_config.get('command_timeout', command_timeout)
+        else:
+            self.user = user
+            self.password = password
+            self.database = database
+            self.host = host
+            self.port = port
+            self.min_size = min_size
+            self.max_size = max_size
+            self.command_timeout = command_timeout
+            
         self.ssl = ssl
         self.pool: Optional[asyncpg.Pool] = None
         self._loop = None
@@ -89,8 +105,10 @@ class PostgresHandler:
             self._loop = asyncio.get_running_loop()
             await self.create_pool()
             await self.create_tables()
+            self._initialized = True
         except Exception as e:
             logger.error(f"❌ Błąd inicjalizacji: {e}")
+            self._initialized = False
             if self.pool:
                 await self.close()
             raise
@@ -250,6 +268,11 @@ class PostgresHandler:
         Returns:
             bool: True jeśli zapis się powiódł, False w przeciwnym razie
         """
+        required_fields = ['symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume']
+        if not all(field in data for field in required_fields):
+            logger.error("❌ Brakujące pola w danych rynkowych")
+            return False
+
         if not self.pool:
             logger.warning("⚠️ Brak puli połączeń do bazy")
             return False
@@ -292,10 +315,38 @@ class PostgresHandler:
         Args:
             query: Zapytanie SQL
             args: Lista krotek z parametrami
+            
+        Raises:
+            ValueError: Gdy lista argumentów jest pusta
+            RuntimeError: Gdy brak puli połączeń
         """
+        if not args:
+            raise ValueError("❌ Lista argumentów nie może być pusta")
+            
         if not self.pool:
             raise RuntimeError("❌ Brak puli połączeń do bazy")
             
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                await conn.executemany(query, args) 
+                await conn.executemany(query, args)
+
+    @retry_on_error()
+    async def fetch_one(self, query: str, *args) -> Optional[asyncpg.Record]:
+        """
+        Pobiera pojedynczy wiersz z zapytania.
+
+        Args:
+            query: Zapytanie SQL
+            *args: Parametry zapytania
+
+        Returns:
+            Pojedynczy wiersz lub None
+        """
+        if not self.pool:
+            raise RuntimeError("❌ Brak puli połączeń do bazy")
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, *args)
+
+    # Alias dla kompatybilności z testami
+    close_pool = close 

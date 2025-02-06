@@ -4,7 +4,7 @@ Moduł zawierający modele danych używane w aplikacji.
 from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, field_validator, ValidationError, model_validator
+from pydantic import BaseModel, field_validator, ValidationError, model_validator, ValidationInfo
 from pydantic_core import PydanticCustomError
 from dataclasses import dataclass
 
@@ -179,6 +179,8 @@ class SignalData(BaseModel):
     @field_validator('stop_loss')
     def validate_stop_loss(cls, v, values):
         """Walidacja poziomu stop loss względem ceny wejścia."""
+        if values is None or not hasattr(values, 'data'):
+            return v
         if not values.data.get('entry_price') or not values.data.get('action'):
             return v
         
@@ -194,6 +196,8 @@ class SignalData(BaseModel):
     @field_validator('take_profit')
     def validate_take_profit(cls, v, values):
         """Walidacja poziomu take profit względem ceny wejścia."""
+        if values is None or not hasattr(values, 'data'):
+            return v
         if not values.data.get('entry_price') or not values.data.get('action'):
             return v
         
@@ -297,18 +301,19 @@ class BacktestResult(BaseModel):
 
 class Position(BaseModel):
     """Model pozycji tradingowej."""
-    id: Optional[str] = None
+    id: str
     timestamp: datetime
     symbol: str
     trade_type: TradeType
-    entry_price: Decimal
     volume: Decimal
-    stop_loss: Decimal
-    take_profit: Decimal
-    status: PositionStatus
+    entry_price: Decimal
+    stop_loss: Optional[Decimal] = None
+    take_profit: Optional[Decimal] = None
+    status: PositionStatus = PositionStatus.OPEN
     exit_price: Optional[Decimal] = None
     profit: Optional[Decimal] = None
     pips: Optional[Decimal] = None
+    point_value: Decimal = Decimal('0.0001')  # Domyślna wartość punktu dla par walutowych
     
     @field_validator('symbol')
     def validate_symbol(cls, v):
@@ -332,32 +337,27 @@ class Position(BaseModel):
             return validate_decimal_range(v, Decimal('-1000000'), Decimal('1000000'))
         return v
     
-    @field_validator('stop_loss')
-    def validate_stop_loss(cls, v, values):
-        """Walidacja poziomu stop loss względem ceny wejścia."""
-        if not values.data.get('entry_price') or not values.data.get('trade_type'):
-            return v
-        
-        entry_price = values.data['entry_price']
-        trade_type = values.data['trade_type']
-        
-        if trade_type == TradeType.BUY and v >= entry_price:
-            raise StopLossError('długiej', 'poniżej')
-        elif trade_type == TradeType.SELL and v <= entry_price:
-            raise StopLossError('krótkiej', 'powyżej')
-        return v
-    
-    @field_validator('take_profit')
-    def validate_take_profit(cls, v, values):
-        """Walidacja poziomu take profit względem ceny wejścia."""
-        if not values.data.get('entry_price') or not values.data.get('trade_type'):
-            return v
-        
-        entry_price = values.data['entry_price']
-        trade_type = values.data['trade_type']
-        
-        if trade_type == TradeType.BUY and v <= entry_price:
-            raise TakeProfitError('długiej', 'powyżej')
-        elif trade_type == TradeType.SELL and v >= entry_price:
-            raise TakeProfitError('krótkiej', 'poniżej')
-        return v 
+    @model_validator(mode='after')
+    def validate_position(self) -> 'Position':
+        """Walidacja całej pozycji."""
+        # Dla zamkniętych pozycji nie sprawdzamy SL/TP
+        if self.status == PositionStatus.CLOSED:
+            return self
+
+        # Walidacja stop loss
+        if self.trade_type == TradeType.BUY:
+            if self.stop_loss is not None and self.stop_loss >= self.entry_price:
+                raise ValueError("Stop loss dla pozycji BUY musi być poniżej ceny wejścia")
+        else:  # SELL
+            if self.stop_loss is not None and self.stop_loss <= self.entry_price:
+                raise ValueError("Stop loss dla pozycji SELL musi być powyżej ceny wejścia")
+
+        # Walidacja take profit
+        if self.trade_type == TradeType.BUY:
+            if self.take_profit is not None and self.take_profit <= self.entry_price:
+                raise ValueError("Take profit dla pozycji BUY musi być powyżej ceny wejścia")
+        else:  # SELL
+            if self.take_profit is not None and self.take_profit >= self.entry_price:
+                raise ValueError("Take profit dla pozycji SELL musi być poniżej ceny wejścia")
+
+        return self 

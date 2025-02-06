@@ -463,4 +463,254 @@ async def test_retry_mechanism_with_transaction(postgres_handler, mock_asyncpg):
     await postgres_handler.execute("SELECT 1")
 
     # Sprawdź, czy transakcja została utworzona dwukrotnie
-    assert mock_asyncpg['connection'].transaction.call_count == 2 
+    assert mock_asyncpg['connection'].transaction.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_initialize_success(postgres_handler, mock_asyncpg):
+    """Test udanej inicjalizacji handlera."""
+    await postgres_handler.initialize()
+    assert postgres_handler.pool is not None
+    assert postgres_handler._initialized is True
+
+
+@pytest.mark.asyncio
+async def test_initialize_failure(postgres_handler, mock_asyncpg):
+    """Test nieudanej inicjalizacji handlera."""
+    mock_asyncpg['create_pool'].side_effect = asyncpg.PostgresError("Connection error")
+    
+    with pytest.raises(asyncpg.PostgresError):
+        await postgres_handler.initialize()
+    assert postgres_handler.pool is None
+    assert postgres_handler._initialized is False
+
+
+@pytest.mark.asyncio
+async def test_constructor_with_minimal_config():
+    """Test konstruktora z minimalną konfiguracją."""
+    config = {
+        "database": {
+            "name": "testdb"
+        }
+    }
+    handler = PostgresHandler(config)
+    assert handler.database == "testdb"
+    assert handler.user == "postgres"  # wartość domyślna
+    assert handler.pool is None
+
+
+@pytest.mark.asyncio
+async def test_constructor_without_config():
+    """Test konstruktora bez konfiguracji."""
+    handler = PostgresHandler()
+    assert handler.database == "mt5remotetest"
+    assert handler.user == "postgres"
+    assert handler.pool is None
+
+
+@pytest.mark.asyncio
+async def test_close_without_pool(postgres_handler):
+    """Test zamykania gdy nie ma puli połączeń."""
+    await postgres_handler.close()
+    assert postgres_handler.pool is None
+
+
+@pytest.mark.asyncio
+async def test_execute_error_handling(postgres_handler, mock_asyncpg):
+    """Test obsługi błędów w execute."""
+    await postgres_handler.create_pool()
+    mock_asyncpg['connection'].execute.side_effect = [
+        asyncpg.PostgresError("First error"),
+        asyncpg.PostgresError("Second error"),
+        None  # sukces za trzecim razem
+    ]
+    
+    await postgres_handler.execute("SELECT 1")
+    assert mock_asyncpg['connection'].execute.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_save_market_data_validation(postgres_handler, mock_asyncpg):
+    """Test walidacji danych w save_market_data."""
+    await postgres_handler.create_pool()
+    
+    # Brakujące pole
+    invalid_data = {
+        "symbol": "EURUSD",
+        "timestamp": datetime.now(),
+        "open": 1.1000,
+        # brak high
+        "low": 1.0900,
+        "close": 1.1050,
+        "volume": 1000.0
+    }
+    
+    result = await postgres_handler.save_market_data(invalid_data)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_execute_many_validation(postgres_handler, mock_asyncpg):
+    """Test walidacji danych w execute_many."""
+    await postgres_handler.create_pool()
+    
+    # Pusta lista argumentów
+    with pytest.raises(ValueError):
+        await postgres_handler.execute_many("INSERT INTO test VALUES ($1)", [])
+
+
+@pytest.mark.asyncio
+async def test_retry_on_error_returns_none():
+    """Test dekoratora retry_on_error gdy funkcja zwraca None."""
+    mock_func = AsyncMock()
+    mock_func.side_effect = [
+        asyncpg.PostgresError("Error 1"),
+        asyncpg.PostgresError("Error 2"),
+        None  # Ostatnia próba zwraca None
+    ]
+
+    @retry_on_error(retries=3, delay=0)
+    async def test_func():
+        return await mock_func()
+
+    result = await test_func()
+    assert result is None
+    assert mock_func.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_initialize_sets_initialized_flag():
+    """Test ustawiania flagi initialized w metodzie initialize."""
+    handler = PostgresHandler()
+    
+    # Mockujemy create_pool i create_tables
+    handler.create_pool = AsyncMock()
+    handler.create_tables = AsyncMock()
+    
+    # Pierwszy przypadek - sukces
+    await handler.initialize()
+    assert handler._initialized is True
+    
+    # Drugi przypadek - błąd
+    handler.create_pool.side_effect = Exception("Test error")
+    with pytest.raises(Exception):
+        await handler.initialize()
+    assert handler._initialized is False
+
+
+@pytest.mark.asyncio
+async def test_initialize_sets_initialized_false(postgres_handler, mock_asyncpg):
+    """Test ustawienia flagi initialized na False przy błędzie."""
+    mock_asyncpg['create_pool'].side_effect = Exception("Test error")
+    
+    with pytest.raises(Exception):
+        await postgres_handler.initialize()
+    assert postgres_handler._initialized is False
+
+
+@pytest.mark.asyncio
+async def test_create_pool_raises_exception(postgres_handler, mock_asyncpg):
+    """Test podnoszenia wyjątku w create_pool."""
+    mock_asyncpg['create_pool'].side_effect = Exception("Test error")
+    
+    with pytest.raises(Exception):
+        await postgres_handler.create_pool()
+
+
+@pytest.mark.asyncio
+@patch('src.database.postgres_handler.logger')
+async def test_close_logs_info(mock_logger, postgres_handler, mock_asyncpg):
+    """Test logowania informacji przy zamykaniu puli."""
+    await postgres_handler.create_pool()
+    await postgres_handler.close()
+    mock_logger.info.assert_called_with("🥷 Zamknięto pulę połączeń do bazy")
+
+
+@pytest.mark.asyncio
+@patch('src.database.postgres_handler.logger')
+async def test_save_market_data_logs_error(mock_logger, postgres_handler, mock_asyncpg):
+    """Test logowania błędu w save_market_data."""
+    await postgres_handler.create_pool()
+    mock_asyncpg['connection'].execute.side_effect = Exception("Test error")
+    
+    result = await postgres_handler.save_market_data({
+        "symbol": "EURUSD",
+        "timestamp": datetime.now(),
+        "open": 1.1000,
+        "high": 1.1100,
+        "low": 1.0900,
+        "close": 1.1050,
+        "volume": 1000.0
+    })
+    
+    assert result is False
+    mock_logger.error.assert_called_with("❌ Błąd podczas zapisywania danych rynkowych: Test error")
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_runtime_error(postgres_handler):
+    """Test podnoszenia RuntimeError w execute."""
+    with pytest.raises(RuntimeError, match="❌ Brak puli połączeń do bazy"):
+        await postgres_handler.execute("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_execute_many_raises_value_error(postgres_handler):
+    """Test podnoszenia ValueError w execute_many."""
+    with pytest.raises(ValueError, match="❌ Lista argumentów nie może być pusta"):
+        await postgres_handler.execute_many("SELECT 1", [])
+
+
+@pytest.mark.asyncio
+async def test_retry_on_error_all_retries_fail():
+    """Test dekoratora retry_on_error gdy wszystkie próby nie powiodą się."""
+    mock_func = AsyncMock()
+    mock_func.side_effect = [
+        asyncpg.PostgresError("Error 1"),
+        asyncpg.PostgresError("Error 2"),
+        asyncpg.PostgresError("Error 3")
+    ]
+
+    @retry_on_error(retries=3, delay=0)
+    async def test_func():
+        await mock_func()
+
+    with pytest.raises(asyncpg.PostgresError):
+        await test_func()
+
+    assert mock_func.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_retry_on_error_returns_none_on_error():
+    """Test dekoratora retry_on_error gdy funkcja zwraca None po błędzie."""
+    mock_func = AsyncMock()
+    mock_func.side_effect = [
+        asyncpg.PostgresError("Error 1"),
+        None  # Druga próba zwraca None
+    ]
+
+    @retry_on_error(retries=2, delay=0)
+    async def test_func():
+        return await mock_func()
+
+    result = await test_func()
+    assert result is None
+    assert mock_func.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_initialize_sets_initialized_false_on_error():
+    """Test ustawiania flagi initialized na False przy błędzie w initialize."""
+    handler = PostgresHandler()
+    handler._initialized = True  # Ustawiamy flagę na True przed testem
+    
+    # Mockujemy create_pool, aby rzucał wyjątek
+    handler.create_pool = AsyncMock(side_effect=Exception("Test error"))
+    handler.create_tables = AsyncMock()
+    
+    with pytest.raises(Exception):
+        await handler.initialize()
+    
+    assert handler._initialized is False
+    assert handler.create_tables.call_count == 0  # create_tables nie powinno być wywołane 

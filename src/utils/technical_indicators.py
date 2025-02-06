@@ -1,3 +1,4 @@
+"""Moduł zawierający funkcje do obliczania wskaźników technicznych."""
 import pandas as pd
 import numpy as np
 from typing import Optional, Union, Dict, Tuple, List
@@ -22,6 +23,20 @@ class IndicatorParams:
         'd_period': 3
     })
 
+def add_technical_indicators(df: pd.DataFrame, params: Optional[IndicatorParams] = None) -> pd.DataFrame:
+    """
+    Dodaje wskaźniki techniczne do DataFrame.
+
+    Args:
+        df: DataFrame z danymi cenowymi
+        params: Parametry wskaźników (opcjonalne)
+
+    Returns:
+        DataFrame z dodanymi wskaźnikami
+    """
+    indicators = TechnicalIndicators(params)
+    return indicators.calculate_all(df)
+
 class TechnicalIndicators:
     """Klasa do obliczania wskaźników technicznych"""
     
@@ -33,12 +48,25 @@ class TechnicalIndicators:
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Dane wejściowe muszą być typu pandas DataFrame")
         
-        if len(df) == 0:
-            return df.copy()
-        
         required_columns = ['open', 'high', 'low', 'close', 'volume']
+        
+        # Sprawdzamy czy DataFrame ma wymagane kolumny
         if not all(col in df.columns for col in required_columns):
             raise KeyError(f"DataFrame musi zawierać kolumny: {required_columns}")
+            
+        # Jeśli DataFrame jest pusty, zwracamy go z pustymi kolumnami wskaźników
+        if len(df) == 0:
+            df = df.copy()
+            df['SMA_20'] = pd.Series(dtype=float)
+            df['SMA_50'] = pd.Series(dtype=float)
+            df['RSI'] = pd.Series(dtype=float)
+            df['BB_middle'] = pd.Series(dtype=float)
+            df['BB_upper'] = pd.Series(dtype=float)
+            df['BB_lower'] = pd.Series(dtype=float)
+            df['MACD'] = pd.Series(dtype=float)
+            df['Signal_Line'] = pd.Series(dtype=float)
+            df['MACD_Histogram'] = pd.Series(dtype=float)
+            return df
 
         df = self.add_moving_averages(df)
         df = self.add_rsi(df)
@@ -55,7 +83,11 @@ class TechnicalIndicators:
             raise ValueError("Dane wejściowe muszą być typu pandas Series")
         if period <= 0:
             raise ValueError("Okres musi być większy od 0")
-        return series.rolling(window=period, min_periods=period).mean()
+        if not np.issubdtype(series.dtype, np.number):
+            raise ValueError("Seria musi zawierać dane numeryczne")
+            
+        # Obliczamy SMA dla dostępnych danych
+        return series.rolling(window=min(period, len(series)), min_periods=1).mean()
 
     def calculate_ema(self, series: pd.Series, period: int) -> pd.Series:
         """Oblicza Exponential Moving Average dla danej serii danych."""
@@ -63,21 +95,9 @@ class TechnicalIndicators:
             raise ValueError("Dane wejściowe muszą być typu pandas Series")
         if period <= 0:
             raise ValueError("Okres musi być większy od 0")
-        return series.ewm(span=period, adjust=False, min_periods=period).mean()
-
-    def add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Dodaje różne średnie ruchome"""
-        df = df.copy()
-        
-        # SMA
-        for name, period in self.params.sma_periods.items():
-            df[f'SMA_{period}'] = self.calculate_sma(df['close'], period)
-        
-        # EMA
-        for name, period in self.params.ema_periods.items():
-            df[f'EMA_{period}'] = self.calculate_ema(df['close'], period)
-        
-        return df
+            
+        # Obliczamy EMA dla dostępnych danych
+        return series.ewm(span=min(period, len(series)), adjust=False, min_periods=1).mean()
 
     def calculate_rsi(self, series: pd.Series, period: int) -> pd.Series:
         """Oblicza Relative Strength Index dla danej serii danych."""
@@ -86,14 +106,15 @@ class TechnicalIndicators:
         if period <= 0:
             raise ValueError("Okres musi być większy od 0")
             
+        # Obliczamy RSI dla dostępnych danych
         delta = series.diff()
         delta = delta[1:]  # Usuwamy pierwszą wartość (NaN)
         
         gains = delta.where(delta > 0, 0)
         losses = -delta.where(delta < 0, 0)
         
-        avg_gains = gains.rolling(window=period, min_periods=period).mean()
-        avg_losses = losses.rolling(window=period, min_periods=period).mean()
+        avg_gains = gains.rolling(window=min(period, len(series)), min_periods=1).mean()
+        avg_losses = losses.rolling(window=min(period, len(series)), min_periods=1).mean()
         
         rs = avg_gains / avg_losses
         rsi = 100 - (100 / (1 + rs))
@@ -121,13 +142,10 @@ class TechnicalIndicators:
         if std_dev <= 0:
             raise ValueError("Odchylenie standardowe musi być większe od 0")
             
-        # Obliczamy SMA i odchylenie standardowe
-        middle = series.rolling(window=period, min_periods=period).mean()
-        rolling_std = series.rolling(window=period, min_periods=period).std()
-        
-        # Upewniamy się, że pierwsze period-1 wartości to NaN
-        middle.iloc[:period-1] = np.nan
-        rolling_std.iloc[:period-1] = np.nan
+        # Obliczamy BB dla dostępnych danych
+        window = min(period, len(series))
+        middle = series.rolling(window=window, min_periods=1).mean()
+        rolling_std = series.rolling(window=window, min_periods=1).std()
         
         # Obliczamy górne i dolne pasmo
         deviation = rolling_std * std_dev
@@ -145,7 +163,7 @@ class TechnicalIndicators:
         lower.name = series.name
         
         # Upewniamy się, że NaN są zachowane
-        mask = pd.isna(series) | pd.isna(middle) | pd.isna(rolling_std)
+        mask = pd.isna(series)
         upper[mask] = np.nan
         middle[mask] = np.nan
         lower[mask] = np.nan
@@ -180,10 +198,11 @@ class TechnicalIndicators:
         if fast_period >= slow_period:
             raise ValueError("Okres szybki musi być mniejszy niż okres wolny")
             
-        exp1 = self.calculate_ema(series, fast_period)
-        exp2 = self.calculate_ema(series, slow_period)
+        # Obliczamy MACD dla dostępnych danych
+        exp1 = self.calculate_ema(series, min(fast_period, len(series)))
+        exp2 = self.calculate_ema(series, min(slow_period, len(series)))
         macd = exp1 - exp2
-        signal = self.calculate_ema(macd, signal_period)
+        signal = self.calculate_ema(macd, min(signal_period, len(series)))
         hist = macd - signal
         return macd, signal, hist
 
@@ -197,7 +216,7 @@ class TechnicalIndicators:
             self.params.macd_params['signal']
         )
         df['MACD'] = macd
-        df['MACD_Signal'] = signal
+        df['Signal_Line'] = signal  # Zmieniono nazwę z MACD_Signal na Signal_Line
         df['MACD_Histogram'] = hist
         return df
 
@@ -396,6 +415,8 @@ class TechnicalIndicators:
         """Wykrywa dywergencje między ceną a wskaźnikiem"""
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Dane wejściowe muszą być typu pandas DataFrame")
+        if len(df) == 0:
+            raise ValueError("DataFrame nie może być pusty")
         if window <= 0:
             raise ValueError("Okno musi być większe od 0")
         if price_col not in df.columns or indicator_col not in df.columns:
@@ -471,6 +492,20 @@ class TechnicalIndicators:
             )
             
         return patterns 
+
+    def add_moving_averages(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Dodaje różne średnie ruchome"""
+        df = df.copy()
+        
+        # SMA
+        for name, period in self.params.sma_periods.items():
+            df[f'SMA_{period}'] = self.calculate_sma(df['close'], period)
+        
+        # EMA
+        for name, period in self.params.ema_periods.items():
+            df[f'EMA_{period}'] = self.calculate_ema(df['close'], period)
+        
+        return df
 
 def calculate_rsi(data: Union[pd.Series, List[float]], periods: int = 14) -> pd.Series:
     """

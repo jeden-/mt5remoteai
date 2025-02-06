@@ -1,196 +1,173 @@
 """
-Moduł zawierający szablony promptów dla modeli AI.
+Moduł zawierający szablony promptów i funkcje pomocnicze do formatowania danych dla modeli AI
 """
-from typing import Dict, Any
-
+from typing import Dict, Union, Any
+from decimal import Decimal
+import json
 
 def get_ollama_prompt_template() -> str:
-    """
-    Zwraca szablon promptu dla modelu Ollama.
-    
-    Returns:
-        str: Szablon promptu
-    """
+    """Zwraca szablon promptu dla modelu Ollama."""
     return """
-    Analiza rynku dla {symbol}:
-    - Aktualna cena: {current_price}
-    - SMA 20: {sma_20}
-    - SMA 50: {sma_50}
-    
-    Na podstawie powyższych danych:
-    1. Określ aktualny trend (UP/DOWN/SIDEWAYS)
-    2. Oceń siłę trendu (1-10)
-    3. Podaj rekomendację (BUY/SELL/WAIT)
-    4. Uzasadnij swoją decyzję
-    
-    Format odpowiedzi:
-    TREND: [UP/DOWN/SIDEWAYS]
-    STRENGTH: [1-10]
-    RECOMMENDATION: [BUY/SELL/WAIT]
-    REASONING: [uzasadnienie]
-    """
+    Analiza techniczna dla {symbol}:
+    Aktualna cena: {current_price}
+    SMA 20: {sma_20}
+    SMA 50: {sma_50}
 
+    Proszę o analizę w następującym formacie:
+    TREND: [UP/DOWN/SIDEWAYS]
+    STRENGTH: [WEAK/MODERATE/STRONG]
+    RECOMMENDATION: [BUY/SELL/HOLD]
+    REASONING: [Szczegółowe uzasadnienie]
+    """
 
 def get_claude_prompt_template() -> str:
-    """
-    Zwraca szablon promptu dla modelu Claude.
-    
-    Returns:
-        str: Szablon promptu
-    """
+    """Zwraca szablon promptu dla modelu Claude."""
     return """
-    Przeprowadź szczegółową analizę rynku dla {symbol}:
-    
-    DANE RYNKOWE:
-    - Aktualna cena: {current_price}
-    - SMA 20: {sma_20}
-    - SMA 50: {sma_50}
-    
-    Proszę o:
-    1. Analizę trendu i jego siły
-    2. Rekomendację transakcyjną (long/short/neutral)
-    3. Sugestię poziomów SL i TP (w pipsach)
-    4. Ocenę ryzyka transakcji
-    5. Uzasadnienie rekomendacji
-    
-    Odpowiedź powinna zawierać:
-    - Rekomendację
-    - Sugerowany SL
-    - Sugerowany TP
-    - Uzasadnienie
-    """
+    Analiza techniczna dla {symbol}:
+    Aktualna cena: {current_price}
+    SMA 20: {sma_20}
+    SMA 50: {sma_50}
 
+    Proszę o analizę zawierającą:
+    1. Rekomendację [BUY/SELL/HOLD]
+    2. Sugerowany SL (w pipsach)
+    3. Sugerowany TP (w pipsach)
+    4. Uzasadnienie decyzji
+    """
 
 def format_market_data_for_prompt(market_data: Dict[str, Any]) -> str:
     """
     Formatuje dane rynkowe do postaci tekstu dla promptu.
     
     Args:
-        market_data: Słownik z danymi rynkowymi
+        market_data: Słownik zawierający dane rynkowe
         
     Returns:
-        str: Sformatowany tekst z danymi
+        Sformatowany tekst z danymi rynkowymi
         
     Raises:
-        ValueError: Gdy brakuje wymaganych danych
+        ValueError: Gdy dane wejściowe są nieprawidłowe
     """
-    if not market_data or not isinstance(market_data, dict):
+    if not isinstance(market_data, dict) or not market_data:
         raise ValueError("Market data must be a non-empty dictionary")
-        
-    if 'symbol' not in market_data or not market_data['symbol']:
+    
+    if 'symbol' not in market_data:
         raise ValueError("Symbol is required in market data")
         
-    template = """
-    Symbol: {symbol}
-    Cena: {current_price}
-    SMA 20: {sma_20}
-    SMA 50: {sma_50}
-    Zmiana 24h: {price_change_24h}
-    Wolumen 24h: {volume_24h}
+    # Konwersja wartości None na "N/A"
+    formatted_data = {
+        'symbol': market_data['symbol'],
+        'current_price': "N/A" if market_data.get('current_price') is None else str(market_data.get('current_price')),
+        'sma_20': "N/A" if market_data.get('sma_20') is None else str(market_data.get('sma_20')),
+        'sma_50': "N/A" if market_data.get('sma_50') is None else str(market_data.get('sma_50')),
+        'price_change_24h': "N/A" if market_data.get('price_change_24h') is None else str(market_data.get('price_change_24h')),
+        'volume_24h': "N/A" if market_data.get('volume_24h') is None else str(market_data.get('volume_24h'))
+    }
+    
+    return f"""
+    Symbol: {formatted_data['symbol']}
+    Current Price: {formatted_data['current_price']}
+    SMA 20: {formatted_data['sma_20']}
+    SMA 50: {formatted_data['sma_50']}
+    24h Price Change: {formatted_data['price_change_24h']}
+    24h Volume: {formatted_data['volume_24h']}
     """
-    
-    # Zastąp brakujące wartości przez 'N/A'
-    formatted_data = {k: market_data.get(k, 'N/A') for k in [
-        'symbol',
-        'current_price',
-        'sma_20',
-        'sma_50',
-        'price_change_24h',
-        'volume_24h'
-    ]}
-    
-    # Zamień None na 'N/A'
-    for k, v in formatted_data.items():
-        if v is None:
-            formatted_data[k] = 'N/A'
-            
-    return template.format(**formatted_data)
-
 
 class TradingPrompts:
-    """Klasa zawierająca szablony promptów dla analizy rynku."""
-
-    @staticmethod
-    def get_market_analysis_prompt(data: Dict) -> str:
+    """Klasa zawierająca metody do generowania promptów tradingowych"""
+    
+    REQUIRED_MARKET_FIELDS = ['symbol', 'current_price', 'sma_20', 'sma_50', 'price_change_24h', 'volume_24h']
+    REQUIRED_RISK_FIELDS = ['symbol', 'type', 'volume', 'entry_price', 'account_balance', 'current_exposure']
+    
+    @classmethod
+    def get_market_analysis_prompt(cls, data: Dict[str, Any]) -> str:
         """
         Generuje prompt do analizy rynku.
-
+        
         Args:
             data: Słownik z danymi rynkowymi
-
+            
         Returns:
-            str: Wygenerowany prompt
-
+            Tekst promptu
+            
         Raises:
-            ValueError: Gdy brakuje wymaganych pól w danych
+            ValueError: Gdy brakuje wymaganych pól
         """
-        required_fields = ['symbol', 'current_price', 'sma_20', 'sma_50', 'price_change_24h', 'volume_24h']
-        for field in required_fields:
+        for field in cls.REQUIRED_MARKET_FIELDS:
             if field not in data:
                 raise ValueError(f"Brak wymaganego pola: {field}")
-                
-        return f"""Analiza rynku dla {data['symbol']}:
-
-DANE TECHNICZNE:
-- Aktualna cena: {data['current_price']:.4f}
-- SMA20: {data['sma_20']:.4f}
-- SMA50: {data['sma_50']:.4f}
-- Zmiana 24h: {data['price_change_24h']:.2f}%
-- Wolumen 24h: {data['volume_24h']}
-
-Wymagam konkretnej odpowiedzi zawierającej:
-1. Kierunek trendu (UP/DOWN/SIDEWAYS)
-2. Siła trendu (1-10)
-3. Rekomendacja (BUY/SELL/WAIT)
-4. Sugerowany SL (w pips)
-5. Sugerowany TP (w pips)
-
-Format odpowiedzi:
-TREND_DIRECTION: [kierunek]
-TREND_STRENGTH: [siła]
-RECOMMENDATION: [rekomendacja]
-SL_PIPS: [liczba]
-TP_PIPS: [liczba]
-REASONING: [krótkie uzasadnienie]."""
+        
+        # Konwersja wartości na string z odpowiednim formatowaniem
+        formatted_data = {
+            'symbol': str(data['symbol']),
+            'current_price': f"{float(data['current_price']):.4f}",
+            'sma_20': f"{float(data['sma_20']):.4f}",
+            'sma_50': f"{float(data['sma_50']):.4f}",
+            'price_change_24h': f"{float(data['price_change_24h']):.2f}",
+            'volume_24h': str(data['volume_24h'])
+        }
+        
+        return f"""
+        MARKET ANALYSIS FOR {formatted_data['symbol']}
+        
+        CURRENT DATA:
+        Price: {formatted_data['current_price']}
+        SMA 20: {formatted_data['sma_20']}
+        SMA 50: {formatted_data['sma_50']}
+        24h Change: {formatted_data['price_change_24h']}%
+        24h Volume: {formatted_data['volume_24h']}
+        
+        PLEASE PROVIDE:
+        TREND_DIRECTION: [UP/DOWN/SIDEWAYS]
+        TREND_STRENGTH: [WEAK/MODERATE/STRONG]
+        RECOMMENDATION: [BUY/SELL/HOLD]
+        SL_PIPS: [NUMBER]
+        TP_PIPS: [NUMBER]
+        REASONING: [Detailed explanation]
+        """
     
-    @staticmethod
-    def get_risk_analysis_prompt(data: Dict) -> str:
+    @classmethod
+    def get_risk_analysis_prompt(cls, data: Dict[str, Any]) -> str:
         """
         Generuje prompt do analizy ryzyka.
-
+        
         Args:
-            data: Słownik z parametrami transakcji
-
+            data: Słownik z danymi o pozycji
+            
         Returns:
-            str: Wygenerowany prompt
-
+            Tekst promptu
+            
         Raises:
-            ValueError: Gdy brakuje wymaganych pól w danych
+            ValueError: Gdy brakuje wymaganych pól
         """
-        required_fields = ['symbol', 'type', 'volume', 'entry_price', 'account_balance', 'current_exposure']
-        for field in required_fields:
+        for field in cls.REQUIRED_RISK_FIELDS:
             if field not in data:
                 raise ValueError(f"Brak wymaganego pola: {field}")
-                
-        return f"""Analiza ryzyka dla planowanej transakcji:
-
-PARAMETRY:
-- Instrument: {data['symbol']}
-- Typ: {data['type']}
-- Wielkość pozycji: {data['volume']:.2f}
-- Cena wejścia: {data['entry_price']:.4f}
-- Saldo konta: {data['account_balance']:.2f}
-- Aktualna ekspozycja: {data['current_exposure']:.2%}
-
-Wymagana odpowiedź:
-1. Ocena ryzyka (LOW/MEDIUM/HIGH)
-2. Risk/Reward Ratio
-3. % kapitału na ryzyku
-4. Rekomendacja (PROCEED/ADJUST/ABORT)
-
-Format odpowiedzi:
-RISK_LEVEL: [poziom]
-RR_RATIO: [liczba]
-CAPITAL_AT_RISK: [procent]
-RECOMMENDATION: [rekomendacja]
-REASONING: [krótkie uzasadnienie].""" 
+        
+        # Konwersja wartości na string z odpowiednim formatowaniem
+        formatted_data = {
+            'symbol': str(data['symbol']),
+            'type': str(data['type']),
+            'volume': f"{float(data['volume']):.2f}",
+            'entry_price': f"{float(data['entry_price']):.4f}",
+            'account_balance': f"{float(data['account_balance']):.2f}",
+            'current_exposure': f"{float(data['current_exposure'])*100:.2f}"
+        }
+        
+        return f"""
+        RISK ANALYSIS FOR {formatted_data['symbol']}
+        
+        POSITION DETAILS:
+        Type: {formatted_data['type']}
+        Volume: {formatted_data['volume']}
+        Entry Price: {formatted_data['entry_price']}
+        Account Balance: {formatted_data['account_balance']}
+        Current Exposure: {formatted_data['current_exposure']}%
+        
+        PLEASE PROVIDE:
+        RISK_LEVEL: [LOW/MEDIUM/HIGH]
+        RR_RATIO: [NUMBER]
+        CAPITAL_AT_RISK: [PERCENTAGE]
+        RECOMMENDATION: [PROCEED/ADJUST/REJECT]
+        REASONING: [Detailed explanation]
+        """ 

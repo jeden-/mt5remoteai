@@ -9,10 +9,16 @@ from decimal import Decimal
 
 from .base_strategy import BaseStrategy
 from src.utils.technical_indicators import calculate_rsi, calculate_macd, calculate_bollinger_bands
+from src.utils.logger import TradingLogger
 
 
 class BasicStrategy(BaseStrategy):
     """Podstawowa strategia tradingowa łącząca analizę techniczną z AI."""
+
+    def __init__(self, *args, **kwargs):
+        """Inicjalizacja strategii."""
+        super().__init__(*args, **kwargs)
+        self.logger = TradingLogger(strategy_name="BasicStrategy")
 
     async def analyze_market(self, symbol: str) -> Dict[str, Any]:
         """
@@ -29,7 +35,7 @@ class BasicStrategy(BaseStrategy):
         """
         try:
             # Pobierz dane historyczne
-            df = await self.mt5_connector.get_rates(symbol, 100)
+            df = await self.mt5.get_rates(symbol, 100)
             
             # Sprawdź czy mamy wystarczająco danych
             if df.empty or len(df) < 50:
@@ -41,14 +47,15 @@ class BasicStrategy(BaseStrategy):
             
             # Przygotuj dane rynkowe
             market_data = {
+                'symbol': symbol,
                 'current_price': float(df['close'].iloc[-1]),
                 'volume': float(df['volume'].iloc[-1]),
                 'trend': 'up' if sma_20 > sma_50 else 'down'
             }
             
             # Analizy AI
-            ollama_analysis = await self.ollama_connector.analyze_market_data(df)
-            claude_analysis = await self.anthropic_connector.analyze_market_conditions(df)
+            ollama_analysis = await self.ollama.analyze_market_data(df)
+            claude_analysis = await self.claude.analyze_market_conditions(df)
             
             return {
                 'technical_indicators': {
@@ -95,15 +102,61 @@ class BasicStrategy(BaseStrategy):
             ollama_analysis = analysis['ollama_analysis']
             claude_analysis = analysis['claude_analysis']
 
-            if not all(isinstance(x, dict) for x in [ollama_analysis, claude_analysis]):
-                raise ValueError("Wyniki analizy AI muszą być słownikami")
-            
+            # Sprawdź czy mamy wymagane wskaźniki techniczne
+            if 'technical_indicators' not in market_data or not market_data['technical_indicators']:
+                return {
+                    'action': 'WAIT',
+                    'signals': [],
+                    'reason': 'Brak wymaganych wskaźników technicznych',
+                    'analysis_summary': {
+                        'market_data': market_data,
+                        'ai_recommendations': {
+                            'ollama': ollama_analysis.get('recommendation'),
+                            'claude': claude_analysis.get('recommendation')
+                        }
+                    }
+                }
+
             # Generuj sygnały
             signals = []
             
-            # Logika generowania sygnałów...
+            # Sprawdź rekomendacje AI
+            ollama_rec = ollama_analysis.get('recommendation', '').upper()
+            claude_rec = claude_analysis.get('recommendation', '').upper()
+            
+            # Jeśli obie AI są zgodne, generuj sygnał
+            if ollama_rec == claude_rec and ollama_rec in ['BUY', 'SELL']:
+                signal = {
+                    'symbol': market_data['symbol'],
+                    'action': ollama_rec,
+                    'volume': min(
+                        self._calculate_position_size(
+                            market_data['symbol'],
+                            market_data['current_price'],
+                            market_data['current_price'] * (1 - 0.002)  # 20 pips SL
+                        ),
+                        self.max_position_size
+                    ),
+                    'entry_price': market_data['current_price'],
+                    'stop_loss': self._calculate_stop_loss(
+                        market_data['symbol'],
+                        ollama_rec,
+                        market_data['current_price']
+                    ),
+                    'take_profit': self._calculate_take_profit(
+                        market_data['symbol'],
+                        ollama_rec,
+                        market_data['current_price']
+                    ),
+                    'confidence': min(
+                        ollama_analysis.get('confidence', 0.5),
+                        claude_analysis.get('confidence', 0.5)
+                    )
+                }
+                signals.append(signal)
             
             return {
+                'action': signals[0]['action'] if signals else 'WAIT',
                 'signals': signals,
                 'analysis_summary': {
                     'market_data': market_data,
@@ -215,6 +268,9 @@ class BasicStrategy(BaseStrategy):
             float: Poziom stop loss
         """
         try:
+            if direction not in ['BUY', 'SELL'] or entry_price is None:
+                return entry_price
+            
             stop_loss_pips = self.config.get('stop_loss_pips', 50)
             pip_value = 0.0001 if 'JPY' not in symbol else 0.01
             pip_distance = stop_loss_pips * pip_value
@@ -241,6 +297,9 @@ class BasicStrategy(BaseStrategy):
             float: Poziom take profit
         """
         try:
+            if direction not in ['BUY', 'SELL'] or entry_price is None:
+                return entry_price
+            
             take_profit_pips = self.config.get('take_profit_pips', 100)
             pip_value = 0.0001 if 'JPY' not in symbol else 0.01
             pip_distance = take_profit_pips * pip_value
@@ -425,6 +484,19 @@ class BasicStrategy(BaseStrategy):
                 logger.error("❌ Brak wymaganych pól w sekcji trend")
                 return False
             
+            # Sprawdź wartości w sekcji trend
+            if any(value is None for value in [trend['sma_20'], trend['sma_50'], trend['sma_200']]):
+                logger.error("❌ Wartości SMA nie mogą być None")
+                return False
+                
+            if trend['trend_direction'] not in ['UP', 'DOWN', 'SIDEWAYS']:
+                logger.error("❌ Nieprawidłowy kierunek trendu")
+                return False
+                
+            if trend['trend_strength'] < 0:
+                logger.error("❌ Siła trendu nie może być ujemna")
+                return False
+            
             # Sprawdź sekcję momentum
             momentum = analysis['momentum']
             required_momentum = ['rsi', 'macd', 'macd_signal', 'macd_hist', 'momentum']
@@ -442,6 +514,10 @@ class BasicStrategy(BaseStrategy):
             # Sprawdź wartości
             if not (0 <= momentum['rsi'] <= 100):
                 logger.error("❌ Nieprawidłowa wartość RSI")
+                return False
+                
+            if momentum['macd_signal'] is None or momentum['momentum'] is None:
+                logger.error("❌ Wartości macd_signal lub momentum nie mogą być None")
                 return False
                 
             if not (volatility['bb_lower'] <= volatility['bb_middle'] <= volatility['bb_upper']):
