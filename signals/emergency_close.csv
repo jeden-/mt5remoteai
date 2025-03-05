@@ -1,0 +1,6 @@
+id,timestamp,symbol,action,volume,price,sl_points,tp_points,ticket,comment,processed
+1,2025-03-04 23:59:59,EURUSD,CLOSE,0,0,0,0,1720643,"Zamknięcie awaryjne 1",0
+2,2025-03-04 23:59:59,GBPUSD,CLOSE,0,0,0,0,1720641,"Zamknięcie awaryjne 2",0
+3,2025-03-04 23:59:59,USDJPY,CLOSE,0,0,0,0,1720640,"Zamknięcie awaryjne 3",0
+4,2025-03-04 23:59:59,XAUUSD,CLOSE,0,0,0,0,1720639,"Zamknięcie awaryjne 4",0
+5,2025-03-04 23:59:59,BTCUSD,CLOSE,0,0,0,0,1720638,"Zamknięcie awaryjne 5",0 

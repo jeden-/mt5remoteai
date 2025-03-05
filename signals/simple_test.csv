@@ -1,0 +1,2 @@
+id,timestamp,symbol,action,volume,price,sl_points,tp_points,ticket,comment,processed
+1,2025-03-04 22:00:00,EURUSD,BUY,0.01,0,0,0,0,Test prosty,0 

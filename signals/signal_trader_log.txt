@@ -1,0 +1,5 @@
+=============== LOG RESET ===============
+Data: 04.03.2025
+EA ma zapisywać komunikaty diagnostyczne w tym pliku.
+Jeśli ten wpis jest jedynym wpisem, oznacza to, że EA nie ma dostępu lub nie zapisuje komunikatów.
+=======================================
